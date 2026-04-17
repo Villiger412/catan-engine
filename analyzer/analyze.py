@@ -25,7 +25,11 @@ import requests
 # ---------------------------------------------------------------------------
 DEFAULT_API   = "http://localhost:8000"
 DEFAULT_GAMES = 400
-DEFAULT_SIMS  = 1500
+# Raised from 1500 → 4000 after the rule-based policy improvements landed
+# (conditional ports + scarcity-weighted resources + setup denial). At 4000
+# sims MC std error halves to ≈±0.48%, which is now worth paying for since
+# policy bias is the shrinking error source.
+DEFAULT_SIMS  = 4000
 DATA_DIR      = Path(__file__).parent / "data"
 REPORT_PATH   = Path(__file__).parent / "report" / "index.html"
 CACHE_PATH    = DATA_DIR / "results_cache.json"
@@ -167,6 +171,11 @@ def parse_game(game_data):
         if len(play_order) != 4:
             return None
 
+        # Game-level skill tier (Colonist eloType 0–4, 4 = highest). Per-player
+        # ELO is anonymized out of this dataset, so we can only slice by game tier.
+        elo_tier = int(d.get("gameSettings", {}).get("eloType", -1))
+        is_ranked = bool(d.get("gameDetails", {}).get("isRanked", False))
+
         # ── Board hexes ──────────────────────────────────────────────────────
         hex_states = ms.get("tileHexStates", {})
         if len(hex_states) != 19:
@@ -259,6 +268,8 @@ def parse_game(game_data):
             "has_positions": has_positions,     # True if all 8 vertices found
             "winner_idx": winner_idx,
             "play_order": play_order,
+            "elo_tier": elo_tier,
+            "is_ranked": is_ranked,
         }
 
     except (KeyError, TypeError, ValueError, IndexError):
@@ -473,6 +484,8 @@ def run_analysis(n_games, n_sims, api_url, verbose=True):
             "probabilities": probs,
             "play_order":    parsed["play_order"],
             "used_positions": used_pos,
+            "elo_tier":      parsed.get("elo_tier", -1),
+            "is_ranked":     parsed.get("is_ranked", False),
         })
 
         if verbose and len(results) % 25 == 0:
@@ -505,6 +518,38 @@ def _save_cache(results):
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
+
+def tier_breakdown(results):
+    """Per-elo-tier calibration summary. Humans at higher ELO play closer to
+    GTO, so calibration gap vs engine should shrink — that's the signal."""
+    from collections import defaultdict
+    by_tier = defaultdict(list)
+    for r in results:
+        by_tier[r.get("elo_tier", -1)].append(r)
+
+    rows = []
+    for tier in sorted(by_tier.keys()):
+        bucket = by_tier[tier]
+        if len(bucket) < 5:
+            continue
+        probs   = np.array([r["probabilities"] for r in bucket])
+        winners = np.array([r["winner_idx"]    for r in bucket])
+        # rank-1 (engine top pick) win rate in this tier
+        rank1_win = np.mean(np.argmax(probs, axis=1) == winners)
+        # rank-2 win rate — the blocking-effect signal
+        ranked = np.argsort(-probs, axis=1)
+        rank2_win = np.mean([ranked[i, 1] == w for i, w in enumerate(winners)])
+        # Engine's top-pick mean probability in this tier
+        mean_top = float(np.max(probs, axis=1).mean())
+        rows.append({
+            "tier": int(tier),
+            "n": len(bucket),
+            "rank1_win_rate": float(rank1_win),
+            "rank2_win_rate": float(rank2_win),
+            "mean_top_prob":  mean_top,
+        })
+    return rows
+
 
 def compute_metrics(results):
     if not results:
@@ -1042,6 +1087,15 @@ def main():
     print(f"  Rank Accuracy     : {m['rank_accuracy']*100:.1f}%  (25% = random)")
     print(f"  ECE               : {m['ece']*100:.1f}%  (lower = better)")
     print(f"  Log Loss          : {m['log_loss']:.4f}  (random = {m['log_loss_random']:.4f})")
+
+    # Per-tier breakdown — higher ELO tier → human play closer to GTO
+    tiers = tier_breakdown(results)
+    if tiers:
+        print("\n  Per-tier calibration (higher tier = closer to GTO):")
+        print(f"  {'tier':>5} {'n':>5} {'rank1_win':>11} {'rank2_win':>11} {'mean_top_p':>12}")
+        for t in tiers:
+            print(f"  {t['tier']:>5} {t['n']:>5} {t['rank1_win_rate']*100:>10.1f}% "
+                  f"{t['rank2_win_rate']*100:>10.1f}% {t['mean_top_prob']*100:>11.1f}%")
 
     generate_report(results, args.sims)
 

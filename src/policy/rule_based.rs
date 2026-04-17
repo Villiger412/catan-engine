@@ -41,8 +41,10 @@ impl Policy for RuleBasedPolicy {
 
 // ── Resource Valuation ─────────────────────────────────────────────────────
 
-/// Strategic resource values (tunable).
-const RESOURCE_VALUE: [f64; RESOURCE_COUNT] = [
+/// Baseline strategic resource values (tunable). These get scaled per-board
+/// by scarcity in `BoardContext` so wheat on a wheat-rich board is worth less
+/// than wheat on a wheat-starved one.
+const BASE_RESOURCE_VALUE: [f64; RESOURCE_COUNT] = [
     1.0, // Brick
     1.0, // Wood
     1.1, // Wheat
@@ -50,12 +52,51 @@ const RESOURCE_VALUE: [f64; RESOURCE_COUNT] = [
     0.8, // Sheep
 ];
 
-/// Score a vertex for settlement placement.
-fn vertex_score(board: &BoardLayout, _state: &GameState, vertex: usize, _player: usize) -> f64 {
-    let hexes = vertex_hex_ids(vertex);
-    let mut score = 0.0;
-    let mut resource_types = 0u8; // bitmask of resource types seen
+/// Per-board scoring context: resource weights scaled by this board's
+/// scarcity profile. Cheap to compute (~19 hex iterations).
+#[derive(Debug, Clone, Copy)]
+pub struct BoardContext {
+    /// Final resource weight = BASE_RESOURCE_VALUE[r] × scarcity_factor[r].
+    pub weight: [f64; RESOURCE_COUNT],
+}
 
+impl BoardContext {
+    pub fn from_board(board: &BoardLayout) -> Self {
+        // Total production weight per resource across the board.
+        let mut total = [0.0f64; RESOURCE_COUNT];
+        for hex in 0..HEX_COUNT {
+            if let Some(res) = board.hex_resource(hex) {
+                total[res as usize] += production_weight(board.tile_numbers[hex]);
+            }
+        }
+        // Mean non-zero production across all resources present.
+        let (sum, count): (f64, usize) = total.iter()
+            .fold((0.0, 0usize), |(s, c), &t| if t > 0.0 { (s + t, c + 1) } else { (s, c) });
+        let mean = if count > 0 { sum / count as f64 } else { 1.0 };
+
+        // scarcity_factor = mean / resource_total, clamped to [0.5, 2.0]
+        // so a resource producing half the average gets +up-to-2x weight,
+        // and an abundant one gets down-weighted, but never extremely.
+        let mut weight = [0.0; RESOURCE_COUNT];
+        for r in 0..RESOURCE_COUNT {
+            let factor = if total[r] > 1e-9 {
+                (mean / total[r]).clamp(0.5, 2.0)
+            } else {
+                2.0 // resource entirely missing from board → max scarcity
+            };
+            weight[r] = BASE_RESOURCE_VALUE[r] * factor;
+        }
+        BoardContext { weight }
+    }
+}
+
+/// Raw production value of a vertex: sum of resource * production across its
+/// adjacent hexes, scaled by board scarcity. Used as a building block by
+/// `vertex_score` and by the denial bonus.
+fn vertex_production_value(board: &BoardLayout, ctx: &BoardContext, vertex: usize) -> (f64, u8) {
+    let hexes = vertex_hex_ids(vertex);
+    let mut value = 0.0;
+    let mut resource_types = 0u8;
     for &h in hexes {
         if h < 0 {
             continue;
@@ -63,36 +104,135 @@ fn vertex_score(board: &BoardLayout, _state: &GameState, vertex: usize, _player:
         let hex = h as usize;
         if let Some(res) = board.hex_resource(hex) {
             let prod = production_weight(board.tile_numbers[hex]);
-            score += RESOURCE_VALUE[res as usize] * prod * 36.0; // scale for readability
+            value += ctx.weight[res as usize] * prod * 36.0;
             resource_types |= 1 << (res as u8);
         }
     }
+    (value, resource_types)
+}
 
-    // Diversity bonus: +1.5 per unique resource type
-    let diversity = resource_types.count_ones() as f64;
+/// Bitmask of resources produced at a player's currently-placed settlements
+/// (plus a hypothetical settlement at `also_vertex` if Some).
+fn player_produced_resources(
+    board: &BoardLayout,
+    state: &GameState,
+    player: usize,
+    also_vertex: Option<usize>,
+) -> u8 {
+    let mut mask = 0u8;
+    let mut add_vertex = |v: usize| {
+        for &h in vertex_hex_ids(v) {
+            if h < 0 { continue; }
+            if let Some(res) = board.hex_resource(h as usize) {
+                mask |= 1 << (res as u8);
+            }
+        }
+    };
+    for v in 0..VERTEX_COUNT {
+        if state.player_has_building(player, v) {
+            add_vertex(v);
+        }
+    }
+    if let Some(v) = also_vertex {
+        add_vertex(v);
+    }
+    mask
+}
+
+/// Score a vertex for settlement placement.
+///
+/// `produced_mask` is the bitmask of resources the player already produces
+/// (used so a 2:1 port is only worth full value when we produce that resource).
+/// Pass 0 if you don't care (legacy callers).
+fn vertex_score(
+    board: &BoardLayout,
+    ctx: &BoardContext,
+    vertex: usize,
+    produced_mask: u8,
+) -> f64 {
+    let (mut score, resource_types) = vertex_production_value(board, ctx, vertex);
+
+    // Diversity bonus: +1.5 per unique resource type on adjacent hexes.
+    // Fold the hypothetical settlement at this vertex into the player's set.
+    let combined = resource_types | produced_mask;
+    let diversity = combined.count_ones() as f64;
     score += diversity * 1.5;
 
-    // Port bonus
+    // Port bonus — conditional on producing the relevant resource.
     if let Some(port) = board.port_at_vertex(vertex as u8) {
         match port {
-            PortType::ThreeToOne => score += 1.0,
-            PortType::TwoToOne(_) => score += 2.0,
+            PortType::ThreeToOne => score += 0.8,
+            PortType::TwoToOne(r) => {
+                // 2:1 port is only valuable if we produce that resource
+                // (including via this settlement). Otherwise it's worth
+                // roughly as much as a 3:1 (generic trade route option).
+                let bit = 1u8 << (r as u8);
+                if combined & bit != 0 {
+                    score += 2.0;
+                } else {
+                    score += 0.5;
+                }
+            }
         }
     }
 
     score
 }
 
+/// Denial bonus: by taking `vertex`, we block (via distance rule) its
+/// neighboring vertices from being placed on. Value = sum of production
+/// value of those blocked neighbor vertices that are currently legal.
+/// Caller weights this against own-score.
+fn denial_bonus(board: &BoardLayout, ctx: &BoardContext, state: &GameState, vertex: usize) -> f64 {
+    let mut bonus = 0.0;
+    for &n in vertex_neighbors(vertex) {
+        if n < 0 {
+            continue;
+        }
+        let nv = n as usize;
+        // Only count neighbors currently legal for placement (unoccupied and distance-rule OK).
+        // Since `vertex` is not yet placed, `distance_rule_ok(nv)` reflects the board *before*
+        // we place; that's fine — it tells us what an opponent could have taken.
+        if state.vertex_occupied(nv) {
+            continue;
+        }
+        if !state.distance_rule_ok(nv) {
+            continue;
+        }
+        let (v, _) = vertex_production_value(board, ctx, nv);
+        bonus += v;
+    }
+    bonus
+}
+
 // ── Setup Phase ────────────────────────────────────────────────────────────
+
+/// Denial weight during setup. Only applied in round 0 where many snake-draft
+/// placements are still to come; in round 1, denial matters less (the player
+/// has no further placements to benefit from blocking) so we taper it.
+const DENIAL_WEIGHT_ROUND_0: f64 = 0.30;
+const DENIAL_WEIGHT_ROUND_1: f64 = 0.05;
 
 fn select_setup_settlement(state: &GameState, board: &BoardLayout, actions: &[Action]) -> Action {
     let cp = state.current_player as usize;
+    let ctx = BoardContext::from_board(board);
+    let produced = player_produced_resources(board, state, cp, None);
+
+    // Determine snake-draft round for denial weighting.
+    let denial_w = match state.phase {
+        GamePhase::SetupSettlement { round: 0 } => DENIAL_WEIGHT_ROUND_0,
+        _ => DENIAL_WEIGHT_ROUND_1,
+    };
+
     let mut best_action = actions[0];
     let mut best_score = f64::NEG_INFINITY;
 
     for &action in actions {
         if let Action::PlaceSettlement(v) = action {
-            let score = vertex_score(board, state, v as usize, cp);
+            let v = v as usize;
+            let own = vertex_score(board, &ctx, v, produced);
+            let denied = denial_bonus(board, &ctx, state, v);
+            let score = own + denial_w * denied;
             if score > best_score {
                 best_score = score;
                 best_action = action;
@@ -108,22 +248,23 @@ fn select_setup_road<R: Rng>(
     actions: &[Action],
     _rng: &mut R,
 ) -> Action {
-    // Place road toward the best neighboring unoccupied vertex
+    // Place road toward the best neighboring unoccupied vertex.
     let cp = state.current_player as usize;
+    let ctx = BoardContext::from_board(board);
+    let produced = player_produced_resources(board, state, cp, None);
     let mut best_action = actions[0];
     let mut best_score = f64::NEG_INFINITY;
 
     for &action in actions {
         if let Action::PlaceRoad(e) = action {
             let (v1, v2) = edge_endpoint_ids(e as usize);
-            // Score based on what vertices this road leads toward
             let s1 = if !state.vertex_occupied(v1 as usize) {
-                vertex_score(board, state, v1 as usize, cp)
+                vertex_score(board, &ctx, v1 as usize, produced)
             } else {
                 0.0
             };
             let s2 = if !state.vertex_occupied(v2 as usize) {
-                vertex_score(board, state, v2 as usize, cp)
+                vertex_score(board, &ctx, v2 as usize, produced)
             } else {
                 0.0
             };
@@ -297,6 +438,8 @@ fn best_by_vertex_score(
     state: &GameState,
     player: usize,
 ) -> Action {
+    let ctx = BoardContext::from_board(board);
+    let produced = player_produced_resources(board, state, player, None);
     let mut best = actions[0];
     let mut best_score = f64::NEG_INFINITY;
     for &a in actions {
@@ -304,7 +447,7 @@ fn best_by_vertex_score(
             Action::PlaceSettlement(v) | Action::BuildCity(v) => v,
             _ => continue,
         };
-        let score = vertex_score(board, state, v as usize, player);
+        let score = vertex_score(board, &ctx, v as usize, produced);
         if score > best_score {
             best_score = score;
             best = a;
@@ -351,17 +494,18 @@ fn select_road_placement<R: Rng>(
     _rng: &mut R,
 ) -> Action {
     let cp = state.current_player as usize;
+    let ctx = BoardContext::from_board(board);
+    let produced = player_produced_resources(board, state, cp, None);
     let mut best = actions[0];
     let mut best_score = f64::NEG_INFINITY;
 
     for &a in actions {
         if let Action::PlaceRoad(e) = a {
             let (v1, v2) = edge_endpoint_ids(e as usize);
-            // Score: how good are the vertices this road leads to?
             let mut score = 0.0;
             for v in [v1, v2] {
                 if !state.vertex_occupied(v as usize) && state.distance_rule_ok(v as usize) {
-                    score += vertex_score(board, state, v as usize, cp) * 0.5;
+                    score += vertex_score(board, &ctx, v as usize, produced) * 0.5;
                 }
             }
             if score > best_score {
@@ -428,8 +572,7 @@ fn select_year_of_plenty(state: &GameState, actions: &[Action]) -> Action {
     let mut best_need = f64::NEG_INFINITY;
     for &a in actions {
         if let Action::YearOfPlentyPick(r) = a {
-            // Higher need = more valuable
-            let need = RESOURCE_VALUE[r as usize] / (p.resources[r as usize] as f64 + 1.0);
+            let need = BASE_RESOURCE_VALUE[r as usize] / (p.resources[r as usize] as f64 + 1.0);
             if need > best_need {
                 best_need = need;
                 best = a;
@@ -441,7 +584,6 @@ fn select_year_of_plenty(state: &GameState, actions: &[Action]) -> Action {
 
 fn select_monopoly(state: &GameState, actions: &[Action]) -> Action {
     let cp = state.current_player as usize;
-    // Pick the resource that opponents have the most of (weighted by value)
     let mut best = actions[0];
     let mut best_score = 0.0;
     for &a in actions {
@@ -453,7 +595,7 @@ fn select_monopoly(state: &GameState, actions: &[Action]) -> Action {
                     total += state.players[p].resources[r];
                 }
             }
-            let score = total as f64 * RESOURCE_VALUE[r];
+            let score = total as f64 * BASE_RESOURCE_VALUE[r];
             if score > best_score {
                 best_score = score;
                 best = a;
