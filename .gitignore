@@ -1,0 +1,26 @@
+# Rust build
+target/
+
+# UI
+ui/node_modules/
+ui/dist/
+ui/*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Logs & local artifacts
+*.log
+catan.ico
+make_icon.py
+
+# Analyzer data (large game files)
+analyzer/data/
+analyzer/__pycache__/
+analyzer/report/
+
+# Build artifacts
+build/
+dist/
+*.spec
