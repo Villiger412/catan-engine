@@ -400,6 +400,26 @@ pub fn production_weight(number: u8) -> f64 {
 
 // ── Board Layout ───────────────────────────────────────────────────────────
 
+/// Returns true if any two adjacent hexes both carry a 6 or 8.
+fn has_adjacent_red_numbers(numbers: &[u8; HEX_COUNT]) -> bool {
+    const DIRS: [(i8, i8); 6] = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)];
+    for h in 0..HEX_COUNT {
+        if numbers[h] == 6 || numbers[h] == 8 {
+            let q = HEX_COORDS[h].q;
+            let r = HEX_COORDS[h].r;
+            for (dq, dr) in DIRS {
+                let neighbor = HexCoord::new(q + dq, r + dr);
+                if let Some(nh) = hex_index(neighbor) {
+                    if numbers[nh] == 6 || numbers[nh] == 8 {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// A specific board setup: which resource and number token is on each hex,
 /// plus port configuration. This is fixed for an entire simulation batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -488,6 +508,73 @@ impl BoardLayout {
             .iter()
             .position(|&t| t == TileType::Desert)
             .unwrap_or(0)
+    }
+
+    /// Generate a random legal Catan board.
+    ///
+    /// Tiles are shuffled with the standard distribution (4W/3B/4Wh/3O/4S/1D).
+    /// Number tokens are shuffled onto non-desert hexes ensuring no two adjacent
+    /// hexes both carry a 6 or 8 (the standard "no adjacent red" rule).
+    /// Port types are shuffled across the 9 fixed outer-edge port slots.
+    pub fn random(rng: &mut impl rand::Rng) -> Self {
+        use rand::seq::SliceRandom;
+
+        // Standard tile counts: 4 Wood, 3 Brick, 4 Wheat, 3 Ore, 4 Sheep, 1 Desert
+        let mut tiles = [
+            TileType::Wood,  TileType::Wood,  TileType::Wood,  TileType::Wood,
+            TileType::Brick, TileType::Brick, TileType::Brick,
+            TileType::Wheat, TileType::Wheat, TileType::Wheat, TileType::Wheat,
+            TileType::Ore,   TileType::Ore,   TileType::Ore,
+            TileType::Sheep, TileType::Sheep, TileType::Sheep, TileType::Sheep,
+            TileType::Desert,
+        ];
+        tiles.shuffle(rng);
+
+        // Standard number tokens: one 2, two each of 3-6 and 8-11, one 12 (18 total)
+        let numbers_pool: [u8; 18] = [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12];
+
+        // Retry until no two adjacent hexes share a 6 or 8
+        let tile_numbers = loop {
+            let mut shuffled = numbers_pool;
+            shuffled.shuffle(rng);
+
+            let mut tile_numbers = [0u8; HEX_COUNT];
+            let mut idx = 0;
+            for i in 0..HEX_COUNT {
+                if tiles[i] != TileType::Desert {
+                    tile_numbers[i] = shuffled[idx];
+                    idx += 1;
+                }
+            }
+
+            if !has_adjacent_red_numbers(&tile_numbers) {
+                break tile_numbers;
+            }
+        };
+
+        // Fixed port slot vertex-pairs on the outer boundary (clockwise from right)
+        let port_slots: [(u8, u8); PORT_COUNT] = [
+            (24, 25), (27, 53), (48, 52), (45, 46), (43, 44),
+            (38, 42), (36, 37), (33, 34), (28, 31),
+        ];
+
+        let mut port_types = [
+            PortType::ThreeToOne, PortType::ThreeToOne,
+            PortType::ThreeToOne, PortType::ThreeToOne,
+            PortType::TwoToOne(Resource::Brick),
+            PortType::TwoToOne(Resource::Wood),
+            PortType::TwoToOne(Resource::Wheat),
+            PortType::TwoToOne(Resource::Ore),
+            PortType::TwoToOne(Resource::Sheep),
+        ];
+        port_types.shuffle(rng);
+
+        let mut ports = [(PortType::ThreeToOne, 0u8, 0u8); PORT_COUNT];
+        for i in 0..PORT_COUNT {
+            ports[i] = (port_types[i], port_slots[i].0, port_slots[i].1);
+        }
+
+        Self { tile_types: tiles, tile_numbers, ports }
     }
 
     /// Parse a board from the JSON format produced by `get_board_layout()`.

@@ -250,12 +250,28 @@ fn win_prob_result(result: engine::SimulationResult) -> WinProbResult {
     }
 }
 
-/// Return the beginner board layout as a JSON string for frontend rendering.
-/// Includes hex tile types, number tokens, axial coordinates, and port data.
+/// Return a random legal Catan board as a JSON string (same format as `get_board_layout()`).
+///
+/// The board uses the standard tile distribution and number tokens.
+/// The "no adjacent red numbers" rule (no two neighboring 6s or 8s) is enforced.
+/// Ports are shuffled across the 9 fixed outer-edge slots.
+///
+/// Args:
+///     seed: Random seed for reproducibility (default: 42)
 #[pyfunction]
-fn get_board_layout() -> String {
-    use board::{BoardLayout, TileType, PortType, Resource, HEX_COORDS};
-    let b = BoardLayout::beginner();
+#[pyo3(signature = (seed=42))]
+fn get_random_board_layout(seed: u64) -> String {
+    use board::BoardLayout;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let b = BoardLayout::random(&mut rng);
+    board_layout_to_json(&b)
+}
+
+fn board_layout_to_json(b: &board::BoardLayout) -> String {
+    use board::{TileType, PortType, Resource, HEX_COORDS};
 
     let hexes: Vec<String> = (0..board::HEX_COUNT)
         .map(|i| {
@@ -303,6 +319,13 @@ fn get_board_layout() -> String {
     )
 }
 
+/// Return the beginner board layout as a JSON string for frontend rendering.
+/// Includes hex tile types, number tokens, axial coordinates, and port data.
+#[pyfunction]
+fn get_board_layout() -> String {
+    board_layout_to_json(&board::BoardLayout::beginner())
+}
+
 /// Python module definition.
 #[pymodule]
 fn catan_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -314,6 +337,7 @@ fn catan_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(simulate_from_position_converged, m)?)?;
     m.add_function(wrap_pyfunction!(required_simulations, m)?)?;
     m.add_function(wrap_pyfunction!(get_board_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(get_random_board_layout, m)?)?;
     m.add_class::<WinProbResult>()?;
     Ok(())
 }
