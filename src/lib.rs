@@ -227,8 +227,17 @@ fn parse_policy(policy: &str) -> PyResult<engine::PolicyType> {
     match policy {
         "random" => Ok(engine::PolicyType::Random),
         "rule_based" | "rule-based" => Ok(engine::PolicyType::RuleBased),
+        "mcts" => Ok(engine::PolicyType::Mcts(200)),
+        _ if policy.starts_with("mcts_") => {
+            let sims: u32 = policy[5..].parse().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    format!("Invalid mcts spec '{}'. Use 'mcts' or 'mcts_<N>' (e.g. 'mcts_500').", policy),
+                )
+            })?;
+            Ok(engine::PolicyType::Mcts(sims))
+        }
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown policy: '{}'. Use 'random' or 'rule_based'.", policy),
+            format!("Unknown policy: '{}'. Use 'random', 'rule_based', 'mcts', or 'mcts_<N>'.", policy),
         )),
     }
 }

@@ -25,7 +25,7 @@ export interface GamePosition {
 
 export interface SimulateRequest {
   n_simulations: number
-  policy: 'rule_based' | 'random'
+  policy: 'rule_based' | 'random' | 'mcts' | string
   antithetic: boolean
   seed: number
   target_margin?: number

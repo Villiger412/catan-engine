@@ -1,3 +1,4 @@
+pub mod mcts;
 pub mod rule_based;
 
 use crate::actions::Action;

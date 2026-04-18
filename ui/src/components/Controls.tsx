@@ -45,13 +45,18 @@ export default function Controls({ config, methods, onChange, onRun, loading }: 
       {/* Policy toggle */}
       <div className="preset-label">Policy</div>
       <div className="policy-row">
-        {(['rule_based', 'random'] as const).map(p => (
+        {([
+          { id: 'rule_based', label: '⚙️ Rule-Based' },
+          { id: 'random',     label: '🎲 Random' },
+          { id: 'mcts',       label: '🌲 MCTS' },
+        ] as const).map(p => (
           <button
-            key={p}
-            className={`policy-btn ${config.policy === p ? 'active' : ''}`}
-            onClick={() => onChange({ policy: p })}
+            key={p.id}
+            className={`policy-btn ${config.policy === p.id ? 'active' : ''}`}
+            onClick={() => onChange({ policy: p.id })}
+            title={p.id === 'mcts' ? 'Monte Carlo Tree Search (UCB1) — slower but stronger' : undefined}
           >
-            {p === 'rule_based' ? '⚙️ Rule-Based' : '🎲 Random'}
+            {p.label}
           </button>
         ))}
       </div>

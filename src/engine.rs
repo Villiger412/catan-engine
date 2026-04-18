@@ -1,4 +1,5 @@
 use crate::board::BoardLayout;
+use crate::policy::mcts::MctsPolicy;
 use crate::policy::rule_based::RuleBasedPolicy;
 use crate::policy::{Policy, RandomPolicy};
 use crate::simulation::{simulate_antithetic_pair, simulate_game};
@@ -28,6 +29,9 @@ pub struct SimulationConfig {
 pub enum PolicyType {
     Random,
     RuleBased,
+    /// Flat-UCB MCTS. Parameter = rollouts per move.
+    /// Better quality than RuleBased but ~N× slower per game.
+    Mcts(u32),
 }
 
 impl Default for SimulationConfig {
@@ -133,6 +137,9 @@ fn run_batch_single(
         PolicyType::RuleBased => {
             run_batch_with_policy(board, initial_state, &RuleBasedPolicy, config, &mut stats, &mut rng)
         }
+        PolicyType::Mcts(sims) => {
+            run_batch_with_policy(board, initial_state, &MctsPolicy::new(sims), config, &mut stats, &mut rng)
+        }
     }
 
     stats
@@ -173,6 +180,7 @@ fn policy_name(policy: PolicyType) -> String {
     match policy {
         PolicyType::Random => "random".to_string(),
         PolicyType::RuleBased => "rule_based".to_string(),
+        PolicyType::Mcts(sims) => format!("mcts_{sims}"),
     }
 }
 

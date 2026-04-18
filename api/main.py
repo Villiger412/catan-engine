@@ -45,7 +45,7 @@ except Exception as _e:
 # ── Request / response models ─────────────────────────────────────────────────
 class SimulateRequest(BaseModel):
     n_simulations: int = Field(5000, ge=100, le=100_000)
-    policy: str = Field("rule_based", pattern="^(rule_based|random)$")
+    policy: str = Field("rule_based", pattern="^(rule_based|random|mcts|mcts_\\d+)$")
     antithetic: bool = True
     seed: int = 42
     target_margin: Optional[float] = Field(None, gt=0.001, lt=0.5)
