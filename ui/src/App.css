@@ -71,6 +71,29 @@
   border: 1px solid var(--panel-border);
 }
 
+.randomize-btn {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid #5a3a10;
+  background: #2e1e08;
+  color: #f0a830;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.randomize-btn:hover:not(:disabled) {
+  border-color: #f0a830;
+  background: #3e2a0e;
+}
+
+.randomize-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .edit-btn {
   font-size: 11px;
   font-weight: 700;

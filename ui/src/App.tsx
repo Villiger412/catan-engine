@@ -31,6 +31,24 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [editMode, setEditMode] = useState(false)
   const [piecesMode, setPiecesMode] = useState(false)
+  const [randomizing, setRandomizing] = useState(false)
+
+  const randomizeBoard = useCallback(async () => {
+    setRandomizing(true)
+    try {
+      const seed = Math.floor(Math.random() * 2 ** 32)
+      const res = await fetch(`/api/random-board?seed=${seed}`)
+      if (!res.ok) throw new Error(`${res.status}`)
+      const data: BoardData = await res.json()
+      setBoard(data)
+      setServerBoard(data)
+      setPosition(DEFAULT_POSITION)
+    } catch {
+      // silently ignore — server may not be running
+    } finally {
+      setRandomizing(false)
+    }
+  }, [])
 
   const isCustomBoard = JSON.stringify(board) !== JSON.stringify(serverBoard)
   const hasPosition = position.settlements.some(p => p.length > 0) || position.cities.some(p => p.length > 0)
@@ -93,6 +111,14 @@ export default function App() {
           <span className="logo-title">Catan Win-Probability Engine</span>
         </div>
         <div className="header-actions">
+          <button
+            className="randomize-btn"
+            onClick={randomizeBoard}
+            disabled={randomizing}
+            title="Generate a random legal Catan board"
+          >
+            {randomizing ? '...' : '🎲 Randomize'}
+          </button>
           <button
             className={`edit-btn ${editMode ? 'active' : ''}`}
             onClick={() => { setEditMode(v => !v); setPiecesMode(false) }}

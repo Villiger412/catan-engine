@@ -80,6 +80,17 @@ def get_board():
     return _BOARD_CACHE
 
 
+@app.get("/api/random-board")
+def get_random_board(seed: Optional[int] = None):
+    try:
+        import catan_engine  # type: ignore
+    except ImportError:
+        raise HTTPException(503, "Engine not compiled — run `maturin build --release`")
+    import random
+    actual_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+    return json.loads(catan_engine.get_random_board_layout(actual_seed))
+
+
 @app.get("/api/methods")
 def list_methods():
     """List all available win-probability estimators."""
