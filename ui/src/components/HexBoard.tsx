@@ -61,15 +61,40 @@ interface Props {
   board: BoardData
   /** When provided, the board becomes interactive (edit mode). */
   onBoardChange?: (board: BoardData) => void
-  /** When provided, vertex clicks cycle piece ownership (pieces mode). */
+  /** When provided, vertex and/or edge clicks mutate the position. */
   position?: GamePosition
   onPositionChange?: (p: GamePosition) => void
+  /** If true, vertex clicks cycle piece ownership. */
+  piecesMode?: boolean
+  /** If true, edge clicks cycle road ownership. */
+  roadsMode?: boolean
+  /** If true, hex clicks move the robber. */
+  robberMode?: boolean
 }
 
-export default function HexBoard({ board, onBoardChange, position, onPositionChange }: Props) {
+function getEdgeOwner(eid: number, pos: GamePosition): number | null {
+  for (let p = 0; p < 4; p++) {
+    if (pos.roads[p]?.includes(eid)) return p
+  }
+  return null
+}
+
+export default function HexBoard({
+  board, onBoardChange, position, onPositionChange,
+  piecesMode = false, roadsMode = false, robberMode = false,
+}: Props) {
   const editable = Boolean(onBoardChange)
-  const piecesMode = Boolean(onPositionChange)
   const geo = useMemo(() => buildBoardGeometry(HEX_SIZE), [])
+
+  // Robber defaults to the desert unless caller specified.
+  const desertHex = board.hexes.find(h => h.resource === 'desert')?.id ?? 0
+  const robberHex = position?.robber_hex ?? desertHex
+
+  function moveRobber(hexId: number) {
+    if (!onPositionChange || !position) return
+    if (hexId === robberHex) return
+    onPositionChange({ ...position, robber_hex: hexId })
+  }
 
   function cycleVertex(vid: number) {
     if (!onPositionChange || !position) return
@@ -88,6 +113,18 @@ export default function HexBoard({ board, onBoardChange, position, onPositionCha
     }
     // else city P3 → none (already removed)
     onPositionChange({ ...position, settlements: s, cities: c })
+  }
+
+  function cycleEdge(eid: number) {
+    if (!onPositionChange || !position) return
+    const owner = getEdgeOwner(eid, position)
+    const roads = position.roads.map(arr => arr.filter(e => e !== eid))
+    // none → P0 → P1 → P2 → P3 → none
+    const next = owner === null ? 0 : owner === 3 ? -1 : owner + 1
+    if (next >= 0) {
+      roads[next] = [...roads[next], eid]
+    }
+    onPositionChange({ ...position, roads })
   }
 
   const portPositions = useMemo(() => {
@@ -136,7 +173,7 @@ export default function HexBoard({ board, onBoardChange, position, onPositionCha
       viewBox={`0 0 ${VW} ${VH}`}
       width="100%"
       height="100%"
-      style={{ display: 'block', maxHeight: '100%', cursor: (editable || piecesMode) ? 'pointer' : 'default' }}
+      style={{ display: 'block', maxHeight: '100%', cursor: (editable || piecesMode || roadsMode || robberMode) ? 'pointer' : 'default' }}
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
@@ -193,6 +230,18 @@ export default function HexBoard({ board, onBoardChange, position, onPositionCha
           Click vertex → cycle: Red S → Blue S → Green S → Orange S → cities → clear
         </text>
       )}
+      {roadsMode && (
+        <text x={CX} y={VH - 12} textAnchor="middle" fontSize={10} fill="#ffffff60"
+          fontFamily="Nunito, sans-serif" fontWeight="700">
+          Click edge → cycle road owner: Red → Blue → Green → Orange → clear
+        </text>
+      )}
+      {robberMode && (
+        <text x={CX} y={VH - 12} textAnchor="middle" fontSize={10} fill="#ffffff60"
+          fontFamily="Nunito, sans-serif" fontWeight="700">
+          Click a hex → move the robber there (blocks that tile's production)
+        </text>
+      )}
 
       {/* ── Resource hexes ── */}
       {board.hexes.map(hex => {
@@ -204,16 +253,21 @@ export default function HexBoard({ board, onBoardChange, position, onPositionCha
         const isHot = hex.number === 6 || hex.number === 8
         const dots = DOT_COUNT[hex.number] ?? 0
 
+        const hexClick = editable
+          ? () => cycleResource(hex.id)
+          : robberMode ? () => moveRobber(hex.id) : undefined
+        const hexStroke = robberMode && hex.id === robberHex ? '#f5a623' : style.stroke
+        const hexStrokeWidth = robberMode && hex.id === robberHex ? 3 : 2
         return (
           <g key={hex.id} filter="url(#hexInset)">
-            {/* Hex tile — clicking cycles resource */}
+            {/* Hex tile — clicking cycles resource or moves robber */}
             <polygon
               points={pts}
               fill={`url(#tileGrad-${hex.resource})`}
-              stroke={style.stroke}
-              strokeWidth="2"
-              onClick={editable ? () => cycleResource(hex.id) : undefined}
-              style={editable ? { cursor: 'pointer' } : undefined}
+              stroke={hexStroke}
+              strokeWidth={hexStrokeWidth}
+              onClick={hexClick}
+              style={(editable || robberMode) ? { cursor: 'pointer' } : undefined}
             />
 
             {/* Number token — clicking cycles number */}
@@ -252,6 +306,53 @@ export default function HexBoard({ board, onBoardChange, position, onPositionCha
             >
               {style.icon}
             </text>
+          </g>
+        )
+      })}
+
+      {/* ── Robber token ── */}
+      {(() => {
+        const hex = board.hexes[robberHex]
+        if (!hex) return null
+        const c = hexCenter(hex.q, hex.r, HEX_SIZE)
+        const rx = CX + c.x
+        // Offset the robber away from the number token so both stay visible.
+        const ry = CY + c.y - HEX_SIZE * 0.55
+        return (
+          <g transform={`translate(${rx}, ${ry})`} style={{ pointerEvents: 'none' }}>
+            <ellipse cx={0} cy={16} rx={12} ry={3} fill="#00000060" />
+            <path d="M 0,-14 C 7,-14 9,-8 9,-2 L 9,8 L -9,8 L -9,-2 C -9,-8 -7,-14 0,-14 Z"
+              fill="#1a1a1a" stroke="#f5a623" strokeWidth="1.5"
+              style={{ filter: 'drop-shadow(0 2px 3px #000000a0)' }} />
+            <circle cx={0} cy={-6} r={2} fill="#f5a623" />
+          </g>
+        )
+      })()}
+
+      {/* ── Edges: roads (and invisible click targets when in roads mode) ── */}
+      {geo.edgeVertices.map(([v1, v2], eid) => {
+        const a = geo.vertexPixels[v1]
+        const b = geo.vertexPixels[v2]
+        if (!a || !b) return null
+        const x1 = CX + a.x, y1 = CY + a.y
+        const x2 = CX + b.x, y2 = CY + b.y
+        const owner = position ? getEdgeOwner(eid, position) : null
+        const color = owner !== null ? PLAYER_COLORS[owner] : null
+        return (
+          <g key={`edge-${eid}`}
+             onClick={roadsMode ? () => cycleEdge(eid) : undefined}
+             style={roadsMode ? { cursor: 'pointer' } : undefined}>
+            {/* Fat invisible hit target to make edge clicking comfortable */}
+            {roadsMode && (
+              <line x1={x1} y1={y1} x2={x2} y2={y2}
+                stroke="#ffffff01" strokeWidth={16} strokeLinecap="round" />
+            )}
+            {/* Road rendering when owned */}
+            {color && (
+              <line x1={x1} y1={y1} x2={x2} y2={y2}
+                stroke={color} strokeWidth={6} strokeLinecap="round"
+                style={{ filter: 'drop-shadow(0 1px 2px #00000080)' }} />
+            )}
           </g>
         )
       })}

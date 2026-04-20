@@ -19,8 +19,13 @@ pub struct SimulationConfig {
     pub n_threads: usize,
     /// Use antithetic variates for variance reduction.
     pub antithetic: bool,
-    /// Policy to use: "random" or "rule_based".
+    /// Policy to use.
     pub policy: PolicyType,
+    /// How hard `RuleBased` and MCTS rollouts target the VP leader.
+    /// 0.0 = selfish independent best-response; 1.0 = legacy default;
+    /// 2.0 = strong focus-fire coalition approximation.
+    /// Ignored by `Random`.
+    pub coalition_pressure: f64,
     /// Base random seed (each thread gets a derived seed).
     pub seed: u64,
 }
@@ -29,9 +34,12 @@ pub struct SimulationConfig {
 pub enum PolicyType {
     Random,
     RuleBased,
-    /// Flat-UCB MCTS. Parameter = rollouts per move.
-    /// Better quality than RuleBased but ~N× slower per game.
+    /// Flat-UCB MCTS with `RandomPolicy` rollouts. Parameter = rollouts/move.
     Mcts(u32),
+    /// Flat-UCB MCTS with `RuleBasedPolicy` rollouts (uses `coalition_pressure`).
+    /// Slower but lets coalition-against-the-leader emerge in the tree's
+    /// action values, which is the closest the engine gets to multiplayer Nash.
+    McRule(u32),
 }
 
 impl Default for SimulationConfig {
@@ -41,6 +49,7 @@ impl Default for SimulationConfig {
             n_threads: 0,
             antithetic: true,
             policy: PolicyType::RuleBased,
+            coalition_pressure: RuleBasedPolicy::DEFAULT_COALITION_PRESSURE,
             seed: 42,
         }
     }
@@ -98,6 +107,7 @@ pub fn run_simulation(
                 n_threads: 1,
                 antithetic: config.antithetic,
                 policy: config.policy,
+                coalition_pressure: config.coalition_pressure,
                 seed: thread_seed,
             };
             run_batch_single(board, initial_state, &thread_config)
@@ -135,10 +145,15 @@ fn run_batch_single(
             run_batch_with_policy(board, initial_state, &RandomPolicy, config, &mut stats, &mut rng)
         }
         PolicyType::RuleBased => {
-            run_batch_with_policy(board, initial_state, &RuleBasedPolicy, config, &mut stats, &mut rng)
+            let p = RuleBasedPolicy::new(config.coalition_pressure);
+            run_batch_with_policy(board, initial_state, &p, config, &mut stats, &mut rng)
         }
         PolicyType::Mcts(sims) => {
             run_batch_with_policy(board, initial_state, &MctsPolicy::new(sims), config, &mut stats, &mut rng)
+        }
+        PolicyType::McRule(sims) => {
+            let p = MctsPolicy::with_rule_based_rollout(sims, config.coalition_pressure);
+            run_batch_with_policy(board, initial_state, &p, config, &mut stats, &mut rng)
         }
     }
 
@@ -181,6 +196,7 @@ fn policy_name(policy: PolicyType) -> String {
         PolicyType::Random => "random".to_string(),
         PolicyType::RuleBased => "rule_based".to_string(),
         PolicyType::Mcts(sims) => format!("mcts_{sims}"),
+        PolicyType::McRule(sims) => format!("mcts_rule_{sims}"),
     }
 }
 
@@ -191,6 +207,7 @@ pub fn run_until_converged(
     target_margin: f64,
     max_simulations: u32,
     policy: PolicyType,
+    coalition_pressure: f64,
     seed: u64,
 ) -> SimulationResult {
     let start = Instant::now();
@@ -204,6 +221,7 @@ pub fn run_until_converged(
             n_threads: 0,
             antithetic: true,
             policy,
+            coalition_pressure,
             seed: current_seed,
         };
 
@@ -239,6 +257,7 @@ mod tests {
             n_threads: 1,
             antithetic: false,
             policy: PolicyType::Random,
+            coalition_pressure: RuleBasedPolicy::DEFAULT_COALITION_PRESSURE,
             seed: 42,
         };
 
@@ -256,6 +275,7 @@ mod tests {
             n_threads: 2,
             antithetic: true,
             policy: PolicyType::Random,
+            coalition_pressure: RuleBasedPolicy::DEFAULT_COALITION_PRESSURE,
             seed: 42,
         };
 

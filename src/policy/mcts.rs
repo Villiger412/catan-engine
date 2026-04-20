@@ -1,5 +1,6 @@
 use crate::actions::{apply_action, Action};
 use crate::board::BoardLayout;
+use crate::policy::rule_based::RuleBasedPolicy;
 use crate::policy::{Policy, RandomPolicy};
 use crate::simulation::simulate_game;
 use crate::state::GameState;
@@ -13,20 +14,35 @@ use rand::Rng;
 /// Search in Settlers of Catan" (best reported result: 49 % vs JSettlers
 /// with 10 000 simulations/move).
 ///
-/// Inner rollouts use `RandomPolicy` for speed. Use this policy for
-/// best-move selection rather than bulk win-probability estimation.
+/// `rollout_pressure` controls the rollout policy:
+/// - `None` → `RandomPolicy` (fast, original Szita & Chaslot behaviour).
+/// - `Some(c)` → `RuleBasedPolicy { coalition_pressure: c }`. Slower per
+///   rollout but opponents play strategically, which makes coalition-
+///   against-the-leader emerge endogenously in the tree's action values —
+///   the cleanest way to approximate multiplayer Nash for GTO estimates.
 pub struct MctsPolicy {
-    /// Total random rollouts per `select_action` call.
     pub simulations_per_move: u32,
-    /// UCB1 exploration constant (sqrt(2) ≈ 1.414 is the textbook default).
     pub exploration: f64,
+    pub rollout_pressure: Option<f64>,
 }
 
 impl MctsPolicy {
+    /// MCTS with random rollouts (original Szita & Chaslot 2010).
     pub fn new(simulations_per_move: u32) -> Self {
         Self {
             simulations_per_move,
             exploration: 1.414,
+            rollout_pressure: None,
+        }
+    }
+
+    /// MCTS with rule-based rollouts at the given coalition pressure. Stronger
+    /// (opponents play smart) but ~5–10× slower per rollout.
+    pub fn with_rule_based_rollout(simulations_per_move: u32, coalition_pressure: f64) -> Self {
+        Self {
+            simulations_per_move,
+            exploration: 1.414,
+            rollout_pressure: Some(coalition_pressure),
         }
     }
 }
@@ -53,7 +69,7 @@ impl Policy for MctsPolicy {
             .min(self.simulations_per_move as usize);
         for i in 0..n {
             for _ in 0..seed_each {
-                wins[i] += rollout(board, state, actions[i], player, rng);
+                wins[i] += rollout(board, state, actions[i], player, self.rollout_pressure, rng);
                 visits[i] += 1;
             }
         }
@@ -70,7 +86,7 @@ impl Policy for MctsPolicy {
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .unwrap_or(0);
-            wins[best] += rollout(board, state, actions[best], player, rng);
+            wins[best] += rollout(board, state, actions[best], player, self.rollout_pressure, rng);
             visits[best] += 1;
         }
 
@@ -91,17 +107,21 @@ fn ucb1(wins: u32, visits: u32, total: u32, c: f64) -> f64 {
     exploit + explore
 }
 
-/// Apply `action` to a clone of `state`, run a random rollout to completion,
-/// and return 1 if `player` wins, 0 otherwise.
+/// Apply `action` to a clone of `state`, run a rollout to completion, and
+/// return 1 if `player` wins, 0 otherwise.
 fn rollout<R: Rng>(
     board: &BoardLayout,
     state: &GameState,
     action: Action,
     player: usize,
+    rollout_pressure: Option<f64>,
     rng: &mut R,
 ) -> u32 {
     let mut next = state.clone();
     apply_action(&mut next, board, action, rng);
-    let result = simulate_game(board, &next, &RandomPolicy, rng);
-    u32::from(result.winner == Some(player as u8))
+    let winner = match rollout_pressure {
+        None => simulate_game(board, &next, &RandomPolicy, rng).winner,
+        Some(c) => simulate_game(board, &next, &RuleBasedPolicy::new(c), rng).winner,
+    };
+    u32::from(winner == Some(player as u8))
 }

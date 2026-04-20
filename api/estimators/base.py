@@ -15,6 +15,7 @@ class EstimateInput:
     target_margin: float | None
     board_json: str | None = None      # None → beginner board
     position_json: str | None = None  # None → fresh game (setup phase); otherwise mid-game
+    coalition_pressure: float = 1.0    # 0 = selfish, 1 = default VP-targeting, >1 = strong focus-fire
 
 
 @dataclass

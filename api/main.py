@@ -45,13 +45,18 @@ except Exception as _e:
 # ── Request / response models ─────────────────────────────────────────────────
 class SimulateRequest(BaseModel):
     n_simulations: int = Field(5000, ge=100, le=100_000)
-    policy: str = Field("rule_based", pattern="^(rule_based|random|mcts|mcts_\\d+)$")
+    policy: str = Field("rule_based", pattern="^(rule_based|random|mcts|mcts_\\d+|mcts_rule|mcts_rule_\\d+)$")
     antithetic: bool = True
     seed: int = 42
     target_margin: Optional[float] = Field(None, gt=0.001, lt=0.5)
     method: str = Field("monte_carlo", description="Estimator key from /api/methods")
     board: Optional[dict] = Field(None, description="Custom board from the editor; None = beginner board")
     position: Optional[dict] = Field(None, description="Mid-game piece placement; None = fresh game")
+    coalition_pressure: float = Field(
+        1.0, ge=0.0, le=3.0,
+        description="How aggressively opponents target the VP leader (0 = selfish, 1 = default, >1 = strong focus-fire). "
+                    "Real GTO win-prob for a position is the band you get by sweeping this.",
+    )
 
 
 class SimulateResponse(BaseModel):
@@ -114,6 +119,7 @@ def simulate(req: SimulateRequest):
         target_margin=req.target_margin,
         board_json=json.dumps(req.board) if req.board is not None else None,
         position_json=json.dumps(req.position) if req.position is not None else None,
+        coalition_pressure=req.coalition_pressure,
     )
     try:
         out = est.estimate(inp)

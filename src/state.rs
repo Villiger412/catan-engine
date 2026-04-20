@@ -123,6 +123,40 @@ pub const SETTLEMENT_COST: [u8; RESOURCE_COUNT] = [1, 1, 1, 0, 1];
 pub const CITY_COST: [u8; RESOURCE_COUNT] = [0, 0, 2, 3, 0];
 pub const DEV_CARD_COST: [u8; RESOURCE_COUNT] = [0, 0, 1, 1, 1];
 
+// ── Mid-Game Seed ──────────────────────────────────────────────────────────
+
+/// Full snapshot used to seed `GameState::from_mid_game_full`. Anything you
+/// don't know (e.g. opponent hands) can be left as `Default`.
+#[derive(Debug, Clone)]
+pub struct MidGamePosition {
+    pub robber_hex: u8,
+    pub settlements: [u64; PLAYER_COUNT],
+    pub cities: [u64; PLAYER_COUNT],
+    pub roads: [u128; PLAYER_COUNT],
+    pub resources: [[u8; RESOURCE_COUNT]; PLAYER_COUNT],
+    /// Unplayed dev cards per player, indexed by `DevCardType`.
+    pub unplayed_dev: [[u8; DEV_CARD_TYPES]; PLAYER_COUNT],
+    pub knights_played: [u8; PLAYER_COUNT],
+    pub vp_hidden: [u8; PLAYER_COUNT],
+    pub current_player: u8,
+}
+
+impl Default for MidGamePosition {
+    fn default() -> Self {
+        Self {
+            robber_hex: 0,
+            settlements: [0u64; PLAYER_COUNT],
+            cities: [0u64; PLAYER_COUNT],
+            roads: [0u128; PLAYER_COUNT],
+            resources: [[0u8; RESOURCE_COUNT]; PLAYER_COUNT],
+            unplayed_dev: [[0u8; DEV_CARD_TYPES]; PLAYER_COUNT],
+            knights_played: [0u8; PLAYER_COUNT],
+            vp_hidden: [0u8; PLAYER_COUNT],
+            current_player: 0,
+        }
+    }
+}
+
 // ── Game State ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -452,20 +486,80 @@ impl GameState {
         cities: [u64; PLAYER_COUNT],
         current_player: u8,
     ) -> Self {
-        let dev_deck = standard_dev_deck();
-        let mut state = Self {
-            players: [
-                PlayerState::new(),
-                PlayerState::new(),
-                PlayerState::new(),
-                PlayerState::new(),
-            ],
+        Self::from_mid_game_full(&MidGamePosition {
+            robber_hex,
             settlements,
             cities,
-            roads: [0u128; PLAYER_COUNT],
-            robber_hex,
+            current_player,
+            ..Default::default()
+        })
+    }
+
+    /// Build a mid-game state from a full snapshot (pieces, roads, resources,
+    /// dev cards, knight counts, robber position). Any fields left at their
+    /// `Default` are treated as empty/unknown. Cached longest-road and
+    /// largest-army holders are recomputed from the seeded state.
+    pub fn from_mid_game_full(init: &MidGamePosition) -> Self {
+        // Account for cards already accounted for elsewhere (in hands, played as
+        // knights, or face-down VP cards). Remove those from the 25-card deck
+        // so duplicates can't be re-drawn.
+        let mut accounted = [0u8; DEV_CARD_TYPES];
+        for p in 0..PLAYER_COUNT {
+            for i in 0..DEV_CARD_TYPES {
+                accounted[i] += init.unplayed_dev[p][i];
+            }
+            accounted[DevCardType::Knight as usize] += init.knights_played[p];
+            accounted[DevCardType::VictoryPoint as usize] += init.vp_hidden[p];
+        }
+        let dev_deck: Vec<DevCardType> = standard_dev_deck()
+            .into_iter()
+            .filter(|card| {
+                let i = *card as usize;
+                if accounted[i] > 0 {
+                    accounted[i] -= 1;
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        let mut players: [PlayerState; PLAYER_COUNT] = [
+            PlayerState::new(),
+            PlayerState::new(),
+            PlayerState::new(),
+            PlayerState::new(),
+        ];
+
+        // A city replaces the settlement on the same vertex; enforce invariant.
+        let mut settlements = init.settlements;
+        for p in 0..PLAYER_COUNT {
+            settlements[p] &= !init.cities[p];
+        }
+
+        for p in 0..PLAYER_COUNT {
+            players[p].resources = init.resources[p];
+            players[p].dev_cards = init.unplayed_dev[p];
+            players[p].knights_played = init.knights_played[p];
+            players[p].victory_points_hidden = init.vp_hidden[p];
+
+            let n_s = settlements[p].count_ones() as u8;
+            let n_c = init.cities[p].count_ones() as u8;
+            let n_r = init.roads[p].count_ones() as u8;
+            // A city was built on a settlement slot, so settlements_remaining covers both.
+            players[p].settlements_remaining = 5u8.saturating_sub(n_s + n_c);
+            players[p].cities_remaining = 4u8.saturating_sub(n_c);
+            players[p].roads_remaining = 15u8.saturating_sub(n_r);
+        }
+
+        let mut state = Self {
+            players,
+            settlements,
+            cities: init.cities,
+            roads: init.roads,
+            robber_hex: init.robber_hex,
             dev_deck,
-            current_player: 0,
+            current_player: init.current_player % PLAYER_COUNT as u8,
             turn_number: 0,
             phase: GamePhase::RollDice,
             largest_army_player: -1,
@@ -473,21 +567,27 @@ impl GameState {
             longest_road_len: [0; PLAYER_COUNT],
         };
 
+        // Seed largest-army from knights_played (>=3 required to qualify).
+        let mut la_player: i8 = -1;
+        let mut la_count: u8 = 2;
         for p in 0..PLAYER_COUNT {
-            let n_s = settlements[p].count_ones() as u8;
-            let n_c = cities[p].count_ones() as u8;
-            // A city was built on a settlement slot, so settlements_remaining covers both
-            state.players[p].settlements_remaining = 5u8.saturating_sub(n_s + n_c);
-            state.players[p].cities_remaining = 4u8.saturating_sub(n_c);
+            let k = init.knights_played[p];
+            if k >= 3 && k > la_count {
+                la_count = k;
+                la_player = p as i8;
+            }
         }
+        state.largest_army_player = la_player;
 
-        // Estimate how far into the game we are (used for draw detection)
+        // Recompute longest-road cache and holder from seeded road bitboards.
+        state.update_longest_road();
+
+        // Rough progress estimate for draw detection.
         let total_pieces: u32 = (0..PLAYER_COUNT)
-            .map(|p| settlements[p].count_ones() + cities[p].count_ones())
+            .map(|p| state.settlements[p].count_ones() + state.cities[p].count_ones())
             .sum();
         state.turn_number = (total_pieces / PLAYER_COUNT as u32) as u16;
-        state.current_player = current_player % PLAYER_COUNT as u8;
-        state.phase = GamePhase::RollDice;
+
         state
     }
 

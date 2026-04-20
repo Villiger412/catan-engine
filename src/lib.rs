@@ -46,18 +46,22 @@ pub struct WinProbResult {
 /// Returns:
 ///     WinProbResult with probabilities, confidence intervals, and metadata.
 #[pyfunction]
-#[pyo3(signature = (n_simulations=5000, n_threads=0, policy="rule_based", antithetic=true, seed=42))]
+#[pyo3(signature = (n_simulations=5000, n_threads=0, policy="rule_based", antithetic=true, seed=42, coalition_pressure=1.0))]
 fn simulate_batch(
     n_simulations: u32,
     n_threads: usize,
     policy: &str,
     antithetic: bool,
     seed: u64,
+    coalition_pressure: f64,
 ) -> PyResult<WinProbResult> {
     let board = board::BoardLayout::beginner();
     let initial_state = state::GameState::new(&board);
     let config = engine::SimulationConfig {
-        n_simulations, n_threads, antithetic, policy: parse_policy(policy)?, seed,
+        n_simulations, n_threads, antithetic,
+        policy: parse_policy(policy)?,
+        coalition_pressure,
+        seed,
     };
     Ok(win_prob_result(engine::run_simulation(&board, &initial_state, &config)))
 }
@@ -70,24 +74,25 @@ fn simulate_batch(
 ///     policy: "random" or "rule_based" (default: "rule_based")
 ///     seed: Random seed (default: 42)
 #[pyfunction]
-#[pyo3(signature = (target_margin=0.02, max_simulations=50000, policy="rule_based", seed=42))]
+#[pyo3(signature = (target_margin=0.02, max_simulations=50000, policy="rule_based", seed=42, coalition_pressure=1.0))]
 fn simulate_until_converged(
     target_margin: f64,
     max_simulations: u32,
     policy: &str,
     seed: u64,
+    coalition_pressure: f64,
 ) -> PyResult<WinProbResult> {
     let board = board::BoardLayout::beginner();
     let initial_state = state::GameState::new(&board);
     Ok(win_prob_result(engine::run_until_converged(
-        &board, &initial_state, target_margin, max_simulations, parse_policy(policy)?, seed,
+        &board, &initial_state, target_margin, max_simulations, parse_policy(policy)?, coalition_pressure, seed,
     )))
 }
 
 /// Run a simulation batch with a custom board supplied as the JSON string
 /// produced by `get_board_layout()` (or the board editor).
 #[pyfunction]
-#[pyo3(signature = (board_json, n_simulations=5000, n_threads=0, policy="rule_based", antithetic=true, seed=42))]
+#[pyo3(signature = (board_json, n_simulations=5000, n_threads=0, policy="rule_based", antithetic=true, seed=42, coalition_pressure=1.0))]
 fn simulate_batch_with_board(
     board_json: &str,
     n_simulations: u32,
@@ -95,31 +100,40 @@ fn simulate_batch_with_board(
     policy: &str,
     antithetic: bool,
     seed: u64,
+    coalition_pressure: f64,
 ) -> PyResult<WinProbResult> {
     let board = board::BoardLayout::from_frontend_json(board_json)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     let initial_state = state::GameState::new(&board);
     let policy_type = parse_policy(policy)?;
-    let config = engine::SimulationConfig { n_simulations, n_threads, antithetic, policy: policy_type, seed };
+    let config = engine::SimulationConfig {
+        n_simulations, n_threads, antithetic,
+        policy: policy_type,
+        coalition_pressure,
+        seed,
+    };
     let result = engine::run_simulation(&board, &initial_state, &config);
     Ok(win_prob_result(result))
 }
 
 /// Run simulation until converged with a custom board JSON string.
 #[pyfunction]
-#[pyo3(signature = (board_json, target_margin=0.02, max_simulations=50000, policy="rule_based", seed=42))]
+#[pyo3(signature = (board_json, target_margin=0.02, max_simulations=50000, policy="rule_based", seed=42, coalition_pressure=1.0))]
 fn simulate_until_converged_with_board(
     board_json: &str,
     target_margin: f64,
     max_simulations: u32,
     policy: &str,
     seed: u64,
+    coalition_pressure: f64,
 ) -> PyResult<WinProbResult> {
     let board = board::BoardLayout::from_frontend_json(board_json)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     let initial_state = state::GameState::new(&board);
     let policy_type = parse_policy(policy)?;
-    let result = engine::run_until_converged(&board, &initial_state, target_margin, max_simulations, policy_type, seed);
+    let result = engine::run_until_converged(
+        &board, &initial_state, target_margin, max_simulations, policy_type, coalition_pressure, seed,
+    );
     Ok(win_prob_result(result))
 }
 
@@ -135,7 +149,7 @@ fn required_simulations(target_margin: f64) -> u32 {
 /// `board_json`: JSON string from `get_board_layout()` or the board editor.
 /// `position_json`: `{ "settlements": [[v,...],[v,...],[...],[...]], "cities": [[...],[...],[...],[...]], "current_player": 0 }`
 #[pyfunction]
-#[pyo3(signature = (board_json, position_json, n_simulations=5000, n_threads=0, policy="rule_based", antithetic=true, seed=42))]
+#[pyo3(signature = (board_json, position_json, n_simulations=5000, n_threads=0, policy="rule_based", antithetic=true, seed=42, coalition_pressure=1.0))]
 fn simulate_from_position(
     board_json: &str,
     position_json: &str,
@@ -144,20 +158,24 @@ fn simulate_from_position(
     policy: &str,
     antithetic: bool,
     seed: u64,
+    coalition_pressure: f64,
 ) -> PyResult<WinProbResult> {
     let board = board::BoardLayout::from_frontend_json(board_json)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
-    let state = parse_position_json(position_json)
+    let state = parse_position_json(position_json, &board)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     let config = engine::SimulationConfig {
-        n_simulations, n_threads, antithetic, policy: parse_policy(policy)?, seed,
+        n_simulations, n_threads, antithetic,
+        policy: parse_policy(policy)?,
+        coalition_pressure,
+        seed,
     };
     Ok(win_prob_result(engine::run_simulation(&board, &state, &config)))
 }
 
 /// Auto-converging version of `simulate_from_position`.
 #[pyfunction]
-#[pyo3(signature = (board_json, position_json, target_margin=0.02, max_simulations=50000, policy="rule_based", seed=42))]
+#[pyo3(signature = (board_json, position_json, target_margin=0.02, max_simulations=50000, policy="rule_based", seed=42, coalition_pressure=1.0))]
 fn simulate_from_position_converged(
     board_json: &str,
     position_json: &str,
@@ -165,62 +183,116 @@ fn simulate_from_position_converged(
     max_simulations: u32,
     policy: &str,
     seed: u64,
+    coalition_pressure: f64,
 ) -> PyResult<WinProbResult> {
     let board = board::BoardLayout::from_frontend_json(board_json)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
-    let state = parse_position_json(position_json)
+    let state = parse_position_json(position_json, &board)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
     Ok(win_prob_result(engine::run_until_converged(
-        &board, &state, target_margin, max_simulations, parse_policy(policy)?, seed,
+        &board, &state, target_margin, max_simulations, parse_policy(policy)?, coalition_pressure, seed,
     )))
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
 /// Parse a position JSON blob into a mid-game `GameState`.
-/// Position JSON: `{ "settlements": [[v,...], ...], "cities": [[v,...], ...], "current_player": 0 }`
-fn parse_position_json(json: &str) -> Result<state::GameState, String> {
+///
+/// Required: `settlements`, `cities`, `current_player` (legacy schema).
+/// Optional extensions: `roads`, `resources`, `unplayed_dev`,
+/// `knights_played`, `vp_hidden`, `robber_hex`. All default to empty/zero,
+/// and indices out of range are silently clamped.
+fn parse_position_json(json: &str, board: &board::BoardLayout) -> Result<state::GameState, String> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
-    let mut settlements = [0u64; board::PLAYER_COUNT];
-    let mut cities = [0u64; board::PLAYER_COUNT];
+    let mut pos = state::MidGamePosition {
+        robber_hex: board.desert_hex() as u8,
+        current_player: v["current_player"].as_u64().unwrap_or(0) as u8,
+        ..Default::default()
+    };
 
-    let parse_player_verts = |arr: &serde_json::Value, mask: &mut u64| {
-        if let Some(verts) = arr.as_array() {
-            for vert in verts {
-                if let Some(vid) = vert.as_u64() {
-                    if vid < board::VERTEX_COUNT as u64 {
-                        *mask |= 1u64 << vid;
+    let mask_u64 = |arr: &serde_json::Value, limit: u64| -> u64 {
+        let mut m = 0u64;
+        if let Some(items) = arr.as_array() {
+            for item in items {
+                if let Some(id) = item.as_u64() {
+                    if id < limit {
+                        m |= 1u64 << id;
                     }
+                }
+            }
+        }
+        m
+    };
+    let mask_u128 = |arr: &serde_json::Value, limit: u64| -> u128 {
+        let mut m = 0u128;
+        if let Some(items) = arr.as_array() {
+            for item in items {
+                if let Some(id) = item.as_u64() {
+                    if id < limit {
+                        m |= 1u128 << id;
+                    }
+                }
+            }
+        }
+        m
+    };
+    let parse_u8_vec = |arr: &serde_json::Value, slot: &mut [u8]| {
+        if let Some(items) = arr.as_array() {
+            for (i, item) in items.iter().enumerate() {
+                if i >= slot.len() { break; }
+                if let Some(n) = item.as_u64() {
+                    slot[i] = n.min(u8::MAX as u64) as u8;
                 }
             }
         }
     };
 
-    if let Some(s_arr) = v["settlements"].as_array() {
-        for (p, player_s) in s_arr.iter().enumerate() {
+    if let Some(arr) = v["settlements"].as_array() {
+        for (p, player_s) in arr.iter().enumerate() {
             if p < board::PLAYER_COUNT {
-                parse_player_verts(player_s, &mut settlements[p]);
+                pos.settlements[p] = mask_u64(player_s, board::VERTEX_COUNT as u64);
             }
         }
     }
-
-    if let Some(c_arr) = v["cities"].as_array() {
-        for (p, player_c) in c_arr.iter().enumerate() {
+    if let Some(arr) = v["cities"].as_array() {
+        for (p, player_c) in arr.iter().enumerate() {
             if p < board::PLAYER_COUNT {
-                parse_player_verts(player_c, &mut cities[p]);
-                // A city replaces the settlement on the same vertex
-                settlements[p] &= !cities[p];
+                pos.cities[p] = mask_u64(player_c, board::VERTEX_COUNT as u64);
             }
         }
     }
+    if let Some(arr) = v["roads"].as_array() {
+        for (p, player_r) in arr.iter().enumerate() {
+            if p < board::PLAYER_COUNT {
+                pos.roads[p] = mask_u128(player_r, board::EDGE_COUNT as u64);
+            }
+        }
+    }
+    if let Some(arr) = v["resources"].as_array() {
+        for (p, player_r) in arr.iter().enumerate() {
+            if p < board::PLAYER_COUNT {
+                parse_u8_vec(player_r, &mut pos.resources[p]);
+            }
+        }
+    }
+    if let Some(arr) = v["unplayed_dev"].as_array() {
+        for (p, player_d) in arr.iter().enumerate() {
+            if p < board::PLAYER_COUNT {
+                parse_u8_vec(player_d, &mut pos.unplayed_dev[p]);
+            }
+        }
+    }
+    parse_u8_vec(&v["knights_played"], &mut pos.knights_played);
+    parse_u8_vec(&v["vp_hidden"], &mut pos.vp_hidden);
 
-    let current_player = v["current_player"].as_u64().unwrap_or(0) as u8;
+    if let Some(hex) = v["robber_hex"].as_u64() {
+        if hex < board::HEX_COUNT as u64 {
+            pos.robber_hex = hex as u8;
+        }
+    }
 
-    // We need a board to call from_mid_game, but it's only used for robber_hex.
-    // Use beginner board; the actual board is passed separately to run_simulation.
-    let dummy_board = board::BoardLayout::beginner();
-    Ok(state::GameState::from_mid_game(dummy_board.desert_hex() as u8, settlements, cities, current_player))
+    Ok(state::GameState::from_mid_game_full(&pos))
 }
 
 fn parse_policy(policy: &str) -> PyResult<engine::PolicyType> {
@@ -228,6 +300,15 @@ fn parse_policy(policy: &str) -> PyResult<engine::PolicyType> {
         "random" => Ok(engine::PolicyType::Random),
         "rule_based" | "rule-based" => Ok(engine::PolicyType::RuleBased),
         "mcts" => Ok(engine::PolicyType::Mcts(200)),
+        "mcts_rule" => Ok(engine::PolicyType::McRule(200)),
+        _ if policy.starts_with("mcts_rule_") => {
+            let sims: u32 = policy[10..].parse().map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    format!("Invalid mcts_rule spec '{}'. Use 'mcts_rule' or 'mcts_rule_<N>'.", policy),
+                )
+            })?;
+            Ok(engine::PolicyType::McRule(sims))
+        }
         _ if policy.starts_with("mcts_") => {
             let sims: u32 = policy[5..].parse().map_err(|_| {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -237,7 +318,10 @@ fn parse_policy(policy: &str) -> PyResult<engine::PolicyType> {
             Ok(engine::PolicyType::Mcts(sims))
         }
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Unknown policy: '{}'. Use 'random', 'rule_based', 'mcts', or 'mcts_<N>'.", policy),
+            format!(
+                "Unknown policy: '{}'. Use 'random', 'rule_based', 'mcts[_<N>]', or 'mcts_rule[_<N>]'.",
+                policy
+            ),
         )),
     }
 }

@@ -10,7 +10,31 @@ use rand::Rng;
 /// - Settlement placement: score by production value, diversity, ports
 /// - Action priority: city > settlement > dev card > road > end turn
 /// - Trading: goal-directed bank trades
-pub struct RuleBasedPolicy;
+///
+/// `coalition_pressure` (default 1.0) scales how aggressively this policy
+/// targets the VP leader with the robber, knight, and steal actions. 0.0 is
+/// pure selfish play (no VP weighting); higher values approximate multiplayer
+/// Nash behaviour where opponents focus-fire whoever's closest to winning.
+/// The "real" GTO win probability for a position lies in the band you get
+/// by sweeping this parameter — it isn't a single number for >2-player games.
+#[derive(Debug, Clone, Copy)]
+pub struct RuleBasedPolicy {
+    pub coalition_pressure: f64,
+}
+
+impl RuleBasedPolicy {
+    pub const DEFAULT_COALITION_PRESSURE: f64 = 1.0;
+
+    pub fn new(coalition_pressure: f64) -> Self {
+        Self { coalition_pressure }
+    }
+}
+
+impl Default for RuleBasedPolicy {
+    fn default() -> Self {
+        Self { coalition_pressure: Self::DEFAULT_COALITION_PRESSURE }
+    }
+}
 
 impl Policy for RuleBasedPolicy {
     fn select_action<R: Rng>(
@@ -27,10 +51,10 @@ impl Policy for RuleBasedPolicy {
         match state.phase {
             GamePhase::SetupSettlement { .. } => select_setup_settlement(state, board, actions),
             GamePhase::SetupRoad { .. } => select_setup_road(state, board, actions, rng),
-            GamePhase::MoveRobber => select_robber_hex(state, board, actions),
-            GamePhase::StealResource => select_steal_target(state, actions),
+            GamePhase::MoveRobber => select_robber_hex(state, board, actions, self.coalition_pressure),
+            GamePhase::StealResource => select_steal_target(state, actions, self.coalition_pressure),
             GamePhase::Discard { .. } => actions[0], // greedy discard already computed
-            GamePhase::MainAction => select_main_action(state, board, actions, rng),
+            GamePhase::MainAction => select_main_action(state, board, actions, rng, self.coalition_pressure),
             GamePhase::RoadBuildingPlace { .. } => select_road_placement(state, board, actions, rng),
             GamePhase::YearOfPlentyPick { .. } => select_year_of_plenty(state, actions),
             GamePhase::MonopolyPick => select_monopoly(state, actions),
@@ -280,7 +304,12 @@ fn select_setup_road<R: Rng>(
 
 // ── Robber Placement ───────────────────────────────────────────────────────
 
-fn select_robber_hex(state: &GameState, board: &BoardLayout, actions: &[Action]) -> Action {
+fn select_robber_hex(
+    state: &GameState,
+    board: &BoardLayout,
+    actions: &[Action],
+    coalition_pressure: f64,
+) -> Action {
     let cp = state.current_player as usize;
     let mut best_action = actions[0];
     let mut best_score = f64::NEG_INFINITY;
@@ -302,7 +331,7 @@ fn select_robber_hex(state: &GameState, board: &BoardLayout, actions: &[Action])
                     if state.player_has_building(p, v as usize) {
                         // Higher score for blocking leading players on productive hexes
                         let their_vp = state.victory_points(p) as f64;
-                        score += prod * (1.0 + their_vp * 0.3);
+                        score += prod * (1.0 + their_vp * 0.3 * coalition_pressure);
                     }
                 }
             }
@@ -315,16 +344,17 @@ fn select_robber_hex(state: &GameState, board: &BoardLayout, actions: &[Action])
     best_action
 }
 
-fn select_steal_target(state: &GameState, actions: &[Action]) -> Action {
+fn select_steal_target(state: &GameState, actions: &[Action], coalition_pressure: f64) -> Action {
     let mut best_action = actions[0];
-    let mut best_score = 0i32;
+    let mut best_score = f64::NEG_INFINITY;
 
     for &action in actions {
         if let Action::StealFrom(target) = action {
-            // Prefer stealing from players with more resources and more VP
+            // Prefer stealing from players with more resources and (under coalition
+            // pressure) from higher-VP players. pressure=0 → pure resource target.
             let t = target as usize;
-            let score = state.players[t].total_resources() as i32
-                + state.victory_points(t) as i32 * 2;
+            let score = state.players[t].total_resources() as f64
+                + state.victory_points(t) as f64 * 2.0 * coalition_pressure;
             if score > best_score {
                 best_score = score;
                 best_action = action;
@@ -341,6 +371,7 @@ fn select_main_action<R: Rng>(
     board: &BoardLayout,
     actions: &[Action],
     rng: &mut R,
+    coalition_pressure: f64,
 ) -> Action {
     let cp = state.current_player as usize;
 
@@ -392,7 +423,7 @@ fn select_main_action<R: Rng>(
         };
         if need_army {
             // Pick best robber hex
-            return select_robber_hex_from_knights(state, board, &knights, cp);
+            return select_robber_hex_from_knights(state, board, &knights, cp, coalition_pressure);
         }
     }
 
@@ -461,6 +492,7 @@ fn select_robber_hex_from_knights(
     board: &BoardLayout,
     knights: &[Action],
     cp: usize,
+    coalition_pressure: f64,
 ) -> Action {
     let mut best = knights[0];
     let mut best_score = f64::NEG_INFINITY;
@@ -474,7 +506,7 @@ fn select_robber_hex_from_knights(
                     if p == cp {
                         score -= prod * 5.0;
                     } else if state.player_has_building(p, v as usize) {
-                        score += prod * (1.0 + state.victory_points(p) as f64 * 0.3);
+                        score += prod * (1.0 + state.victory_points(p) as f64 * 0.3 * coalition_pressure);
                     }
                 }
             }

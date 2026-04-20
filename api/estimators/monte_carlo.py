@@ -21,6 +21,8 @@ class MonteCarloEstimator:
         has_board = board_json is not None
         has_position = inp.position_json is not None
 
+        cp = inp.coalition_pressure
+
         if has_position:
             # Mid-game: simulate from current piece placement
             # Board is required alongside position; fall back to beginner if not supplied
@@ -31,6 +33,7 @@ class MonteCarloEstimator:
                     target_margin=inp.target_margin,
                     policy=inp.policy,
                     seed=inp.seed,
+                    coalition_pressure=cp,
                 )
             else:
                 r = _engine.simulate_from_position(
@@ -39,6 +42,7 @@ class MonteCarloEstimator:
                     policy=inp.policy,
                     antithetic=inp.antithetic,
                     seed=inp.seed,
+                    coalition_pressure=cp,
                 )
         elif has_board:
             # Custom board, fresh game
@@ -48,6 +52,7 @@ class MonteCarloEstimator:
                     target_margin=inp.target_margin,
                     policy=inp.policy,
                     seed=inp.seed,
+                    coalition_pressure=cp,
                 )
             else:
                 r = _engine.simulate_batch_with_board(
@@ -56,6 +61,7 @@ class MonteCarloEstimator:
                     policy=inp.policy,
                     antithetic=inp.antithetic,
                     seed=inp.seed,
+                    coalition_pressure=cp,
                 )
         else:
             # Default beginner board, fresh game
@@ -64,6 +70,7 @@ class MonteCarloEstimator:
                     target_margin=inp.target_margin,
                     policy=inp.policy,
                     seed=inp.seed,
+                    coalition_pressure=cp,
                 )
             else:
                 r = _engine.simulate_batch(
@@ -71,6 +78,7 @@ class MonteCarloEstimator:
                     policy=inp.policy,
                     antithetic=inp.antithetic,
                     seed=inp.seed,
+                    coalition_pressure=cp,
                 )
 
         return EstimateOutput(

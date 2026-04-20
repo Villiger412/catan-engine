@@ -20,17 +20,24 @@ export interface BoardData {
 export interface GamePosition {
   settlements: number[][]  // settlements[player] = vertex IDs
   cities: number[][]       // cities[player] = vertex IDs
+  roads: number[][]        // roads[player]    = edge IDs
+  resources: number[][]    // resources[player] = [brick, wood, wheat, ore, sheep]
+  unplayed_dev: number[][] // unplayed_dev[player] = [knight, vp, road_building, year_of_plenty, monopoly]
+  knights_played: number[] // per player
+  vp_hidden: number[]      // per player (face-down VP cards)
+  robber_hex?: number
   current_player: number
 }
 
 export interface SimulateRequest {
   n_simulations: number
-  policy: 'rule_based' | 'random' | 'mcts' | string
+  policy: 'rule_based' | 'random' | 'mcts' | 'mcts_rule' | string
   antithetic: boolean
   seed: number
   target_margin?: number
   method: string
   position?: GamePosition
+  coalition_pressure: number
 }
 
 export interface MethodInfo {

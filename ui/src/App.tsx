@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import HexBoard from './components/HexBoard'
 import WinPanel from './components/WinPanel'
 import Controls from './components/Controls'
+import CardsPanel from './components/CardsPanel'
+import PlayerBar from './components/PlayerBar'
 import { BEGINNER_BOARD } from './lib/boardData'
 import type { BoardData, GamePosition, MethodInfo, SimResult, SimulateRequest } from './types'
 import './App.css'
@@ -12,13 +14,30 @@ const DEFAULT_CONFIG: SimulateRequest = {
   antithetic: true,
   seed: 42,
   method: 'monte_carlo',
+  coalition_pressure: 1.0,
 }
+
+const EMPTY_PER_PLAYER_5 = () => [[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0]]
 
 const DEFAULT_POSITION: GamePosition = {
   settlements: [[], [], [], []],
   cities: [[], [], [], []],
+  roads: [[], [], [], []],
+  resources: EMPTY_PER_PLAYER_5(),
+  unplayed_dev: EMPTY_PER_PLAYER_5(),
+  knights_played: [0, 0, 0, 0],
+  vp_hidden: [0, 0, 0, 0],
   current_player: 0,
 }
+
+type BoardMode = 'view' | 'edit' | 'pieces' | 'roads' | 'robber'
+
+const MODE_BUTTONS: { id: BoardMode; label: string; icon: string; title: string }[] = [
+  { id: 'pieces', label: 'Pieces', icon: '🏠', title: 'Click a vertex to place / cycle settlement → city' },
+  { id: 'roads',  label: 'Roads',  icon: '🛣️', title: 'Click an edge to cycle road ownership' },
+  { id: 'robber', label: 'Robber', icon: '🦹', title: 'Click a hex to move the robber' },
+  { id: 'edit',   label: 'Board',  icon: '✏️', title: 'Edit tiles and numbers' },
+]
 
 export default function App() {
   const [serverBoard, setServerBoard] = useState<BoardData>(BEGINNER_BOARD)
@@ -29,8 +48,8 @@ export default function App() {
   const [result, setResult] = useState<SimResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [editMode, setEditMode] = useState(false)
-  const [piecesMode, setPiecesMode] = useState(false)
+  const [mode, setMode] = useState<BoardMode>('view')
+  const [cardsFocusPlayer, setCardsFocusPlayer] = useState<number | null>(null)
   const [randomizing, setRandomizing] = useState(false)
 
   const randomizeBoard = useCallback(async () => {
@@ -51,11 +70,22 @@ export default function App() {
   }, [])
 
   const isCustomBoard = JSON.stringify(board) !== JSON.stringify(serverBoard)
-  const hasPosition = position.settlements.some(p => p.length > 0) || position.cities.some(p => p.length > 0)
+  const hasPosition =
+    position.settlements.some(p => p.length > 0) ||
+    position.cities.some(p => p.length > 0) ||
+    position.roads.some(p => p.length > 0) ||
+    position.resources.some(p => p.some(n => n > 0)) ||
+    position.unplayed_dev.some(p => p.some(n => n > 0)) ||
+    position.knights_played.some(n => n > 0) ||
+    position.vp_hidden.some(n => n > 0) ||
+    position.current_player !== 0 ||
+    position.robber_hex !== undefined
 
-  const playerVP = [0, 1, 2, 3].map(p =>
-    (position.settlements[p]?.length ?? 0) + (position.cities[p]?.length ?? 0) * 2
-  )
+  const knightsPlayed = [0, 1, 2, 3].map(p => position.knights_played[p] ?? 0)
+  const laMax = Math.max(...knightsPlayed)
+  const laPlayer = laMax >= 3 && knightsPlayed.filter(k => k === laMax).length === 1
+    ? knightsPlayed.indexOf(laMax)
+    : -1
 
   useEffect(() => {
     fetch('/api/board')
@@ -97,67 +127,89 @@ export default function App() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !loading) runSimulation()
+      if (cardsFocusPlayer !== null && e.key === 'Escape') {
+        setCardsFocusPlayer(null)
+        return
+      }
+      if (e.key === 'Enter' && !loading && cardsFocusPlayer === null) runSimulation()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [loading, runSimulation])
+  }, [loading, runSimulation, cardsFocusPlayer])
+
+  const cycleMode = (next: BoardMode) => setMode(cur => cur === next ? 'view' : next)
 
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-logo">
           <span className="logo-hex">⬡</span>
-          <span className="logo-title">Catan Win-Probability Engine</span>
+          <span className="logo-title">Catan Engine</span>
+          <span className="logo-sub">Win-probability sandbox</span>
         </div>
         <div className="header-actions">
+          <div className="mode-group" role="group" aria-label="Board mode">
+            {MODE_BUTTONS.map(b => (
+              <button
+                key={b.id}
+                className={`mode-btn ${mode === b.id ? 'active' : ''}`}
+                onClick={() => cycleMode(b.id)}
+                title={b.title}
+              >
+                <span className="mode-icon">{b.icon}</span>
+                <span className="mode-label">{b.label}</span>
+              </button>
+            ))}
+          </div>
           <button
-            className="randomize-btn"
+            className="icon-btn"
             onClick={randomizeBoard}
             disabled={randomizing}
             title="Generate a random legal Catan board"
           >
-            {randomizing ? '...' : '🎲 Randomize'}
-          </button>
-          <button
-            className={`edit-btn ${editMode ? 'active' : ''}`}
-            onClick={() => { setEditMode(v => !v); setPiecesMode(false) }}
-            title={editMode ? 'Exit board editor' : 'Edit board tiles'}
-          >
-            {editMode ? '✓ Editing' : '✏️ Edit Board'}
-          </button>
-          <button
-            className={`pieces-btn ${piecesMode ? 'active' : ''}`}
-            onClick={() => { setPiecesMode(v => !v); setEditMode(false) }}
-            title={piecesMode ? 'Exit pieces mode' : 'Place settlements & cities'}
-          >
-            {piecesMode ? '✓ Placing' : '🏠 Pieces'}
+            {randomizing ? '…' : '🎲'}
           </button>
           {isCustomBoard && (
-            <button className="reset-btn" onClick={() => setBoard(serverBoard)} title="Reset to standard board">
+            <button className="icon-btn reset" onClick={() => setBoard(serverBoard)} title="Reset to standard board">
               ↺ Board
             </button>
           )}
           {hasPosition && (
-            <button className="reset-btn" onClick={() => setPosition(DEFAULT_POSITION)} title="Clear all pieces">
+            <button className="icon-btn reset" onClick={() => setPosition(DEFAULT_POSITION)} title="Clear all pieces, hands, and robber">
               ↺ Pieces
             </button>
           )}
-          <div className="header-meta">Phase 4 · Live Position</div>
         </div>
       </header>
+
+      <PlayerBar
+        position={position}
+        onChange={setPosition}
+        onOpenCards={(p) => setCardsFocusPlayer(p)}
+        largestArmyPlayer={laPlayer}
+        winProbs={result?.probabilities ?? null}
+      />
 
       <main className="app-main">
         <section className="board-section">
           <HexBoard
             board={board}
-            onBoardChange={editMode ? setBoard : undefined}
+            onBoardChange={mode === 'edit' ? setBoard : undefined}
             position={position}
-            onPositionChange={piecesMode ? setPosition : undefined}
+            onPositionChange={(mode === 'pieces' || mode === 'roads' || mode === 'robber') ? setPosition : undefined}
+            piecesMode={mode === 'pieces'}
+            roadsMode={mode === 'roads'}
+            robberMode={mode === 'robber'}
           />
+          {isCustomBoard && mode !== 'edit' && (
+            <div className="board-overlay-badge">⬡ Custom board</div>
+          )}
+          {position.robber_hex !== undefined && (
+            <div className="board-overlay-badge robber">🦹 Robber on hex #{position.robber_hex}</div>
+          )}
         </section>
 
-        <aside className="side-panel">
+        <aside className="sim-rail">
           <Controls
             config={config}
             methods={methods}
@@ -165,30 +217,6 @@ export default function App() {
             onRun={runSimulation}
             loading={loading}
           />
-
-          {isCustomBoard && !editMode && (
-            <div className="custom-board-badge">
-              ⬡ Custom board active
-            </div>
-          )}
-
-          {hasPosition && (
-            <div className="position-panel">
-              <div className="panel-title">Current Position</div>
-              <div className="vp-row">
-                {(['Red', 'Blue', 'Green', 'Orange'] as const).map((name, p) => (
-                  <div key={p} className="vp-cell" style={{ borderColor: ['#e74c3c','#3498db','#2ecc71','#f39c12'][p] }}>
-                    <span className="vp-name">{name}</span>
-                    <span className="vp-count">{playerVP[p]} VP</span>
-                    <span className="vp-detail">
-                      {position.settlements[p].length}S {position.cities[p].length}C
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {error && (
             <div className="error-banner">
               <strong>Error:</strong> {error}
@@ -196,10 +224,31 @@ export default function App() {
               <small>Is the API server running? <code>cd api && uvicorn main:app --reload</code></small>
             </div>
           )}
-
           <WinPanel result={result} loading={loading} />
         </aside>
       </main>
+
+      {cardsFocusPlayer !== null && (
+        <div className="cards-modal-backdrop" onClick={() => setCardsFocusPlayer(null)}>
+          <div className="cards-modal" onClick={e => e.stopPropagation()}>
+            <header className="cards-modal-head">
+              <div className="cards-modal-title">Edit hand & dev cards</div>
+              <button
+                className="cards-modal-close"
+                onClick={() => setCardsFocusPlayer(null)}
+                title="Close (Esc)"
+              >
+                ✕
+              </button>
+            </header>
+            <CardsPanel
+              position={position}
+              onChange={setPosition}
+              focusPlayer={cardsFocusPlayer}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

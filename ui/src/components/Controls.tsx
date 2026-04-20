@@ -46,20 +46,46 @@ export default function Controls({ config, methods, onChange, onRun, loading }: 
       <div className="preset-label">Policy</div>
       <div className="policy-row">
         {([
-          { id: 'rule_based', label: '⚙️ Rule-Based' },
-          { id: 'random',     label: '🎲 Random' },
-          { id: 'mcts',       label: '🌲 MCTS' },
+          { id: 'rule_based', label: '⚙️ Rule-Based', title: 'Heuristic expert policy — fastest.' },
+          { id: 'random',     label: '🎲 Random',     title: 'Uniform-random — baseline for variance checks.' },
+          { id: 'mcts',       label: '🌲 MCTS',       title: 'Flat-UCB MCTS with random rollouts (Szita & Chaslot).' },
+          { id: 'mcts_rule',  label: '🌳 MCTS+Rule',  title: 'MCTS with rule-based rollouts — coalition vs leader emerges in the tree. Slower.' },
         ] as const).map(p => (
           <button
             key={p.id}
             className={`policy-btn ${config.policy === p.id ? 'active' : ''}`}
             onClick={() => onChange({ policy: p.id })}
-            title={p.id === 'mcts' ? 'Monte Carlo Tree Search (UCB1) — slower but stronger' : undefined}
+            title={p.title}
           >
             {p.label}
           </button>
         ))}
       </div>
+
+      {/* Coalition pressure — only affects rule_based and mcts_rule */}
+      {(config.policy === 'rule_based' || config.policy === 'mcts_rule') && (
+        <>
+          <div className="preset-label">
+            Coalition pressure
+            <span className="preset-label-value">{config.coalition_pressure.toFixed(2)}</span>
+          </div>
+          <div className="coalition-row">
+            <input
+              type="range"
+              min={0}
+              max={2}
+              step={0.25}
+              value={config.coalition_pressure}
+              onChange={e => onChange({ coalition_pressure: parseFloat(e.target.value) })}
+              className="coalition-slider"
+              title="0 = independent best-response; 1 = default; 2 = strong focus-fire against the VP leader. Multi-player GTO win-prob is the band you get by sweeping this."
+            />
+            <div className="coalition-ticks">
+              <span>selfish</span><span>default</span><span>focus-fire</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Estimator method — only shown when multiple methods are available */}
       {methods.length > 1 && (
