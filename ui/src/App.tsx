@@ -6,6 +6,8 @@ import CardsPanel from './components/CardsPanel'
 import PlayerBar from './components/PlayerBar'
 import { BEGINNER_BOARD } from './lib/boardData'
 import type { BoardData, GamePosition, MethodInfo, SimResult, SimulateRequest } from './types'
+import type { Calibration } from './lib/timing'
+import { positionProgress } from './lib/timing'
 import './App.css'
 
 const DEFAULT_CONFIG: SimulateRequest = {
@@ -46,6 +48,7 @@ export default function App() {
   const [config, setConfig] = useState<SimulateRequest>(DEFAULT_CONFIG)
   const [position, setPosition] = useState<GamePosition>(DEFAULT_POSITION)
   const [result, setResult] = useState<SimResult | null>(null)
+  const [calibration, setCalibration] = useState<Calibration | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<BoardMode>('view')
@@ -117,7 +120,35 @@ export default function App() {
         body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
-      setResult(await res.json())
+      const data: SimResult = await res.json()
+      setResult(data)
+
+      // Capture calibration for self-correcting ETAs on the next run.
+      if (data.games_per_sec > 0 && data.simulations_run > 0) {
+        const progress = positionProgress(hasPosition ? position : null)
+        setCalibration({
+          policy: data.policy,
+          msPerGame: data.elapsed_ms / data.simulations_run,
+          avgTurns: data.avg_turns,
+          turnsPerSec: data.avg_turns * data.games_per_sec,
+          progress,
+          simulationsRun: data.simulations_run,
+        })
+      }
+
+      // Log converged-n for tuning the Auto-mode AUTO_MODE_TYPICAL_N constant.
+      if (config.target_margin !== undefined) {
+        // eslint-disable-next-line no-console
+        console.log('[auto-mode converged]', {
+          policy: data.policy,
+          target_margin: config.target_margin,
+          simulations_run: data.simulations_run,
+          elapsed_ms: data.elapsed_ms,
+          max_margin: data.max_margin,
+          avg_turns: data.avg_turns,
+          games_per_sec: data.games_per_sec,
+        })
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -216,6 +247,8 @@ export default function App() {
             onChange={patch => setConfig(c => ({ ...c, ...patch }))}
             onRun={runSimulation}
             loading={loading}
+            position={hasPosition ? position : null}
+            calibration={calibration}
           />
           {error && (
             <div className="error-banner">

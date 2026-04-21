@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """
-Best-response oracle (MVP) — exploitability lower bound from last placement.
+Best-response oracle — exploitability lower bound from second-settlement
+placement, with an optional deeper policy for the swap-evaluation phase.
 
 For each sampled game with recorded starting positions:
-  1. Compute the baseline 4-player win probabilities under `rule_based` self-play
-     given the actual human placements.
+  1. Compute the baseline 4-player win probabilities under the baseline
+     policy (default `rule_based`), given the actual human placements.
   2. For each player P, enumerate every legal alternative for P's *second*
-     settlement (first is fixed; varying the whole setup tree requires engine
-     changes). For each alternative, re-simulate and record P's win rate.
-  3. max(alternative win rate) − baseline = a lower bound on P's exploitability
-     against rule_based opponents: "I could have done at least this much
-     better by choosing differently on my last placement."
+     settlement (first is fixed; varying the whole setup tree requires
+     engine changes). For each alternative, re-simulate under the chosen
+     deep-policy (all seats) and record P's win rate.
+  3. max(alternative win rate) − baseline = a lower bound on P's
+     exploitability of the baseline profile under the chosen oracle.
 
-This does NOT measure true Nash-distance — only one decision is varied, and
-only for one player at a time. But it gives a concrete, cheap signal that
-the current rule_based placement is leaving win-probability on the table, and
-whose magnitude bounds how much a better policy could improve the GTO estimate
-for this specific position.
+The deep policy applies to *all four seats* in the evaluation step,
+because the current engine takes a single policy per simulation. This
+means the probe answers "were there better placements under deeper
+self-play?" rather than "were there better placements against these
+specific baseline opponents?". Both are valid exploitability signals —
+the former is the Lanctot-et-al. 2017 PSRO best-response-in-pool bound
+when the pool = {deep-policy}.
 
 Usage:
-    python best_response_probe.py [--games 10] [--sims 800]
+    python best_response_probe.py [--games 10] [--sims 800] \\
+                                  [--deep-policy mcts_500]
 
 Requires the API server on http://localhost:8000.
 """
@@ -79,12 +83,12 @@ def legal_alternatives(settlements, excluded_player, excluded_slot):
     return legal
 
 
-def simulate_position(board, settlements, n_sims, api_url, seed=42):
+def simulate_position(board, settlements, n_sims, api_url, policy, seed=42):
     payload = {
         "board": board,
         "n_simulations": n_sims,
         "method": "monte_carlo",
-        "policy": "rule_based",
+        "policy": policy,
         "antithetic": True,
         "seed": seed,
         "position": {
@@ -94,14 +98,14 @@ def simulate_position(board, settlements, n_sims, api_url, seed=42):
         },
     }
     try:
-        r = requests.post(f"{api_url}/api/simulate", json=payload, timeout=120)
+        r = requests.post(f"{api_url}/api/simulate", json=payload, timeout=900)
         r.raise_for_status()
         return r.json().get("probabilities")
     except Exception:
         return None
 
 
-def probe_game(game, n_sims, api_url):
+def probe_game(game, n_sims, api_url, baseline_policy, deep_policy):
     parsed = parse_game(game)
     if parsed is None or not parsed["has_positions"]:
         return None
@@ -109,7 +113,9 @@ def probe_game(game, n_sims, api_url):
     settlements = [list(s) for s in parsed["settlements"]]
     winner = parsed["winner_idx"]
 
-    baseline = simulate_position(board, settlements, n_sims, api_url, seed=42)
+    baseline = simulate_position(
+        board, settlements, n_sims, api_url, baseline_policy, seed=42
+    )
     if baseline is None:
         return None
 
@@ -125,7 +131,9 @@ def probe_game(game, n_sims, api_url):
                 continue
             new_positions = [list(s) for s in settlements]
             new_positions[P][1] = v
-            p = simulate_position(board, new_positions, n_sims, api_url, seed=42)
+            p = simulate_position(
+                board, new_positions, n_sims, api_url, deep_policy, seed=42
+            )
             if p is None:
                 continue
             tested += 1
@@ -143,14 +151,16 @@ def probe_game(game, n_sims, api_url):
         })
 
     return {
-        "baseline": baseline,
-        "winner":   winner,
-        "per_player": per_player,
+        "baseline":     baseline,
+        "winner":       winner,
+        "per_player":   per_player,
         "max_exploitability": max(pp["improvement"] for pp in per_player),
+        "baseline_policy":    baseline_policy,
+        "deep_policy":        deep_policy,
     }
 
 
-def run(n_games, n_sims, api_url):
+def run(n_games, n_sims, api_url, baseline_policy, deep_policy):
     try:
         requests.get(f"{api_url}/api/health", timeout=5).raise_for_status()
     except Exception:
@@ -164,7 +174,7 @@ def run(n_games, n_sims, api_url):
     for game in stream_games(n_games * 3, verbose=False):
         if processed >= n_games:
             break
-        result = probe_game(game, n_sims, api_url)
+        result = probe_game(game, n_sims, api_url, baseline_policy, deep_policy)
         if result is None:
             continue
         rows.append(result)
@@ -204,9 +214,24 @@ def main():
     ap.add_argument("--games", type=int, default=10)
     ap.add_argument("--sims",  type=int, default=800)
     ap.add_argument("--api",   type=str, default=DEFAULT_API)
+    ap.add_argument("--baseline-policy", type=str, default="rule_based",
+                    help="Policy for the baseline simulation (all 4 seats).")
+    ap.add_argument("--deep-policy", type=str, default="rule_based",
+                    help="Policy for the swap-evaluation step (all 4 seats). "
+                         "Use e.g. mcts_500 for a stronger oracle.")
     args = ap.parse_args()
 
-    rows = run(args.games, args.sims, args.api)
+    print(f"Baseline policy: {args.baseline_policy}")
+    print(f"Deep policy:     {args.deep_policy}")
+    if args.baseline_policy == args.deep_policy:
+        print("  (MVP mode: exploitability measured within the baseline policy — "
+              "detects that policy's own blind spots.)")
+    else:
+        print("  (Deep-oracle mode: exploitability bound tightens toward a "
+              "best-response-in-pool in the Lanctot-et-al. 2017 sense.)")
+    print()
+
+    rows = run(args.games, args.sims, args.api, args.baseline_policy, args.deep_policy)
     if rows is None:
         return
     summarize(rows)

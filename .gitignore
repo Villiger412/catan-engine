@@ -24,3 +24,7 @@ analyzer/report/
 build/
 dist/
 *.spec
+
+# Tool-local artefacts
+.claude/
+**/.claude/

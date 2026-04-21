@@ -300,6 +300,18 @@
   color: var(--accent);
 }
 
+.preset-eta {
+  font-size: 9px;
+  color: #6d8aa5;
+  font-weight: 600;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.preset-btn.active .preset-eta {
+  color: #d9a850;
+}
+
 .policy-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -308,6 +320,10 @@
 }
 
 .policy-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1.5px solid var(--card-border);
@@ -318,6 +334,18 @@
   font-weight: 700;
   transition: all 0.15s ease;
   font-family: inherit;
+}
+
+.policy-eta {
+  font-size: 9px;
+  font-weight: 600;
+  color: #6d8aa5;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.policy-btn.active .policy-eta {
+  color: #d9a850;
 }
 
 .policy-btn:hover {
@@ -393,6 +421,19 @@
 
 .run-icon {
   font-size: 16px;
+}
+
+.run-btn {
+  white-space: nowrap;
+}
+
+.run-eta {
+  font-weight: 600;
+  font-size: 12px;
+  opacity: 0.75;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .hint-text {

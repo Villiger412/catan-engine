@@ -1,7 +1,7 @@
-use crate::board::BoardLayout;
+use crate::board::{BoardLayout, PLAYER_COUNT};
 use crate::policy::mcts::MctsPolicy;
 use crate::policy::rule_based::RuleBasedPolicy;
-use crate::policy::{Policy, RandomPolicy};
+use crate::policy::{PerSeatPolicy, Policy, RandomPolicy, SeatPolicy};
 use crate::simulation::{simulate_antithetic_pair, simulate_game};
 use crate::state::GameState;
 use crate::stats::SimulationStats;
@@ -189,6 +189,77 @@ fn run_batch_with_policy<P: Policy>(
             stats.record_win(result.winner, result.turns);
         }
     }
+}
+
+/// Build a fresh owned `SeatPolicy` from a `PolicyType`. Each thread
+/// constructs its own set (policies own per-instance config but no state).
+fn make_seat_policy(p: PolicyType, coalition_pressure: f64) -> SeatPolicy {
+    match p {
+        PolicyType::Random => SeatPolicy::Random(RandomPolicy),
+        PolicyType::RuleBased => SeatPolicy::RuleBased(RuleBasedPolicy::new(coalition_pressure)),
+        PolicyType::Mcts(sims) => SeatPolicy::Mcts(MctsPolicy::new(sims)),
+        PolicyType::McRule(sims) => SeatPolicy::Mcts(MctsPolicy::with_rule_based_rollout(sims, coalition_pressure)),
+    }
+}
+
+/// Run a simulation batch with a distinct policy per seat. Used by the
+/// PSRO / empirical-game-theoretic analysis pipeline to estimate payoff
+/// cells `M[i][j] = "seat 0 plays policy i, other seats play policy j"`.
+pub fn run_per_seat_simulation(
+    board: &BoardLayout,
+    initial_state: &GameState,
+    seat_policies: [PolicyType; PLAYER_COUNT],
+    coalition_pressures: [f64; PLAYER_COUNT],
+    n_simulations: u32,
+    n_threads: usize,
+    antithetic: bool,
+    seed: u64,
+) -> SimulationResult {
+    let start = Instant::now();
+    let threads = if n_threads == 0 { rayon::current_num_threads() } else { n_threads };
+    let sims_per_thread = n_simulations / threads as u32;
+    let remainder = n_simulations % threads as u32;
+
+    let partial_stats: Vec<SimulationStats> = (0..threads)
+        .into_par_iter()
+        .map(|thread_id| {
+            let n = sims_per_thread + if (thread_id as u32) < remainder { 1 } else { 0 };
+            let thread_seed = seed.wrapping_add(thread_id as u64 * 1_000_003);
+            let mut rng = ChaCha8Rng::seed_from_u64(thread_seed);
+            let mut stats = SimulationStats::new();
+
+            let dispatcher = PerSeatPolicy::new([
+                make_seat_policy(seat_policies[0], coalition_pressures[0]),
+                make_seat_policy(seat_policies[1], coalition_pressures[1]),
+                make_seat_policy(seat_policies[2], coalition_pressures[2]),
+                make_seat_policy(seat_policies[3], coalition_pressures[3]),
+            ]);
+
+            let config = SimulationConfig {
+                n_simulations: n,
+                n_threads: 1,
+                antithetic,
+                policy: PolicyType::RuleBased, // unused when passing explicit policy
+                coalition_pressure: coalition_pressures[0], // unused downstream
+                seed: thread_seed,
+            };
+            run_batch_with_policy(board, initial_state, &dispatcher, &config, &mut stats, &mut rng);
+            stats
+        })
+        .collect();
+
+    let mut stats = SimulationStats::new();
+    for partial in &partial_stats { stats.merge(partial); }
+
+    let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+    let games_per_sec = stats.n as f64 / elapsed.as_secs_f64();
+    let name = format!(
+        "per_seat[{},{},{},{}]",
+        policy_name(seat_policies[0]), policy_name(seat_policies[1]),
+        policy_name(seat_policies[2]), policy_name(seat_policies[3]),
+    );
+    SimulationResult { stats, elapsed_ms, games_per_sec, policy_name: name }
 }
 
 fn policy_name(policy: PolicyType) -> String {

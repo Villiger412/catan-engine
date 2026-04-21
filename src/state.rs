@@ -458,6 +458,17 @@ impl GameState {
 
     // ── Turn Management ────────────────────────────────────────────────────
 
+    /// Seat that should choose the next action. Matches `current_player`
+    /// except during `GamePhase::Discard { player }`, where the discarder
+    /// (who may not be the roller) is the acting seat. Used by
+    /// `PerSeatPolicy` to dispatch actions to the right policy.
+    pub fn acting_player(&self) -> u8 {
+        match self.phase {
+            GamePhase::Discard { player } => player,
+            _ => self.current_player,
+        }
+    }
+
     /// Advance to next player.
     pub fn next_player(&mut self) {
         // Move new dev cards to playable

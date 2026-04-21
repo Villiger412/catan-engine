@@ -194,6 +194,79 @@ fn simulate_from_position_converged(
     )))
 }
 
+/// Run a simulation batch with a distinct policy per seat.
+///
+/// `seat_policies` is a 4-element list of policy strings (same spec as
+/// `policy` on the other functions — `"random"`, `"rule_based"`, `"mcts"`,
+/// `"mcts_200"`, `"mcts_rule_500"`, ...). Optional `board_json` /
+/// `position_json` override the default beginner board / fresh-game state.
+///
+/// Returns per-seat win probabilities, with the standard `WinProbResult`
+/// fields. Used by the PSRO / empirical-game-theoretic analysis pipeline
+/// (`analyzer/psro.py`) to estimate meta-game payoff cells
+/// `M[i][j] = win rate of seat 0 under (i, j, j, j)`.
+#[pyfunction]
+#[pyo3(signature = (
+    seat_policies,
+    board_json=None,
+    position_json=None,
+    n_simulations=2000,
+    n_threads=0,
+    antithetic=true,
+    seed=42,
+    coalition_pressure=1.0,
+    coalition_pressures=None,
+))]
+fn simulate_per_seat(
+    seat_policies: Vec<String>,
+    board_json: Option<&str>,
+    position_json: Option<&str>,
+    n_simulations: u32,
+    n_threads: usize,
+    antithetic: bool,
+    seed: u64,
+    coalition_pressure: f64,
+    coalition_pressures: Option<Vec<f64>>,
+) -> PyResult<WinProbResult> {
+    if seat_policies.len() != board::PLAYER_COUNT {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "seat_policies must have exactly {} entries, got {}",
+            board::PLAYER_COUNT, seat_policies.len()
+        )));
+    }
+    let mut parsed = [engine::PolicyType::Random; board::PLAYER_COUNT];
+    for (i, p) in seat_policies.iter().enumerate() {
+        parsed[i] = parse_policy(p)?;
+    }
+    // Per-seat coalition pressure, falling back to the scalar default.
+    // Needed by PSRO when the row and column of the meta-game matrix have
+    // different coalition pressures baked in.
+    let mut cps = [coalition_pressure; board::PLAYER_COUNT];
+    if let Some(v) = coalition_pressures {
+        if v.len() != board::PLAYER_COUNT {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "coalition_pressures must have exactly {} entries, got {}",
+                board::PLAYER_COUNT, v.len()
+            )));
+        }
+        for (i, cp) in v.iter().enumerate() { cps[i] = *cp; }
+    }
+    let board = match board_json {
+        Some(bj) => board::BoardLayout::from_frontend_json(bj)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?,
+        None => board::BoardLayout::beginner(),
+    };
+    let state = match position_json {
+        Some(pj) => parse_position_json(pj, &board)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?,
+        None => state::GameState::new(&board),
+    };
+    Ok(win_prob_result(engine::run_per_seat_simulation(
+        &board, &state, parsed, cps,
+        n_simulations, n_threads, antithetic, seed,
+    )))
+}
+
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
 /// Parse a position JSON blob into a mid-game `GameState`.
@@ -428,6 +501,7 @@ fn catan_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(simulate_until_converged_with_board, m)?)?;
     m.add_function(wrap_pyfunction!(simulate_from_position, m)?)?;
     m.add_function(wrap_pyfunction!(simulate_from_position_converged, m)?)?;
+    m.add_function(wrap_pyfunction!(simulate_per_seat, m)?)?;
     m.add_function(wrap_pyfunction!(required_simulations, m)?)?;
     m.add_function(wrap_pyfunction!(get_board_layout, m)?)?;
     m.add_function(wrap_pyfunction!(get_random_board_layout, m)?)?;

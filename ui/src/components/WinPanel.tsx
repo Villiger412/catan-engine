@@ -111,6 +111,10 @@ export default function WinPanel({ result, loading }: Props) {
           <StatCell label="Time" value={`${result.elapsed_ms.toFixed(0)} ms`} />
           <StatCell label="Speed" value={`${(result.games_per_sec / 1000).toFixed(1)}K g/s`} />
           <StatCell label="Avg turns" value={result.avg_turns.toFixed(1)} />
+          <StatCell
+            label="Turns/s"
+            value={`${((result.avg_turns * result.games_per_sec) / 1000).toFixed(1)}K`}
+          />
           <StatCell label="CI margin" value={`±${(result.max_margin * 100).toFixed(2)}%`} />
           <StatCell label="Policy" value={result.policy.replace('_', '-')} />
         </div>
