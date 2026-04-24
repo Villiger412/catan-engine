@@ -19,7 +19,8 @@ COPY . .
 # Build Rust extension + UI + install Python deps
 RUN pip install -r requirements.txt && \
     cd ui && npm install && npm run build && \
-    cd .. && python -m maturin develop --release
+    cd .. && python -m maturin build --release && \
+    pip install target/wheels/*.whl
 
 # Run API
 EXPOSE 8000
