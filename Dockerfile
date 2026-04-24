@@ -20,7 +20,7 @@ COPY . .
 RUN pip install -r requirements.txt && \
     cd ui && npm install && npm run build && \
     cd .. && python -m maturin build --release && \
-    pip install target/wheels/*.whl
+    pip install $(ls -1 target/wheels/*.whl | head -1)
 
 # Run API
 EXPOSE 8000
