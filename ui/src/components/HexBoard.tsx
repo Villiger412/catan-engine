@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { buildBoardGeometry, hexCenter, hexPolygonPoints, midpoint } from '../lib/hexGeometry'
+import { buildBoardGeometry, hexCenter, hexPolygonPoints } from '../lib/hexGeometry'
 import type { BoardData, GamePosition, HexData } from '../types'
 import { PLAYER_COLORS } from '../types'
 
