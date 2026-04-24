@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 # Add the catan-engine root so Python can find the compiled .pyd
 ENGINE_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ENGINE_ROOT))
+sys.path.insert(0, str(Path(__file__).parent))  # Add api/ for estimators module
 
 # ── Estimator registry ────────────────────────────────────────────────────────
 from estimators import ESTIMATORS, EstimateInput  # noqa: E402
