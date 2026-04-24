@@ -24,11 +24,20 @@ const PORT_COLOR: Record<string, string> = {
 
 const PORT_LABEL: Record<string, string> = {
   '3:1':       '3:1',
-  '2:1:brick': '2:1\nBrick',
-  '2:1:wood':  '2:1\nWood',
-  '2:1:wheat': '2:1\nGrain',
-  '2:1:ore':   '2:1\nOre',
-  '2:1:sheep': '2:1\nWool',
+  '2:1:brick': 'Brick',
+  '2:1:wood':  'Wood',
+  '2:1:wheat': 'Grain',
+  '2:1:ore':   'Ore',
+  '2:1:sheep': 'Wool',
+}
+
+const PORT_ICON: Record<string, string> = {
+  '3:1':       '⚓',
+  '2:1:brick': '🧱',
+  '2:1:wood':  '🌲',
+  '2:1:wheat': '🌾',
+  '2:1:ore':   '⛰️',
+  '2:1:sheep': '🐑',
 }
 
 const DOT_COUNT: Record<number, number> = {
@@ -132,13 +141,16 @@ export default function HexBoard({
       const v1 = geo.vertexPixels[port.v1]
       const v2 = geo.vertexPixels[port.v2]
       if (!v1 || !v2) return []
-      const m = midpoint(v1, v2)
-      const len = Math.hypot(m.x, m.y) || 1
-      // Push port badge 42px outward from the board edge (fits within 640×580 viewBox)
-      const scale = (len + 42) / len
-      const angle = Math.atan2(m.y, m.x) * 180 / Math.PI
+      const mx = (v1.x + v2.x) / 2
+      const my = (v1.y + v2.y) / 2
+      // Push along perpendicular bisector of v1-v2 so badge is equidistant from both vertices
+      let px = -(v2.y - v1.y), py = v2.x - v1.x
+      if (px * mx + py * my < 0) { px = -px; py = -py }
+      const plen = Math.hypot(px, py) || 1
+      const push = 42
+      const angle = Math.atan2(py, px) * 180 / Math.PI
       return [{
-        x: CX + m.x * scale, y: CY + m.y * scale, type: port.type, angle,
+        x: CX + mx + (px / plen) * push, y: CY + my + (py / plen) * push, type: port.type, angle,
         v1x: CX + v1.x, v1y: CY + v1.y,
         v2x: CX + v2.x, v2y: CY + v2.y,
       }]
@@ -208,40 +220,10 @@ export default function HexBoard({
       {/* ── Ocean background ── */}
       <rect x="0" y="0" width={VW} height={VH} fill="url(#oceanGrad)" />
 
-      {/* ── Wave lines ── */}
-      {[-1, 0, 1, 2].map(i => (
-        <ellipse key={i} cx={CX + i * 80} cy={CY + 190 + i * 40} rx={120 + i * 20} ry={12}
-          fill="none" stroke="#ffffff12" strokeWidth="2" />
-      ))}
 
       {/* ── Beach island ── */}
       <polygon points={BEACH_POINTS} fill="url(#beachGrad)" />
 
-      {/* ── Mode hints ── */}
-      {editable && (
-        <text x={CX} y={VH - 12} textAnchor="middle" fontSize={10} fill="#ffffff60"
-          fontFamily="Nunito, sans-serif" fontWeight="700">
-          Click tile → cycle resource · Click number → cycle token
-        </text>
-      )}
-      {piecesMode && (
-        <text x={CX} y={VH - 12} textAnchor="middle" fontSize={10} fill="#ffffff60"
-          fontFamily="Nunito, sans-serif" fontWeight="700">
-          Click vertex → cycle: Red S → Blue S → Green S → Orange S → cities → clear
-        </text>
-      )}
-      {roadsMode && (
-        <text x={CX} y={VH - 12} textAnchor="middle" fontSize={10} fill="#ffffff60"
-          fontFamily="Nunito, sans-serif" fontWeight="700">
-          Click edge → cycle road owner: Red → Blue → Green → Orange → clear
-        </text>
-      )}
-      {robberMode && (
-        <text x={CX} y={VH - 12} textAnchor="middle" fontSize={10} fill="#ffffff60"
-          fontFamily="Nunito, sans-serif" fontWeight="700">
-          Click a hex → move the robber there (blocks that tile's production)
-        </text>
-      )}
 
       {/* ── Resource hexes ── */}
       {board.hexes.map(hex => {
@@ -396,32 +378,85 @@ export default function HexBoard({
 
       {/* ── Port badges ── */}
       {portPositions.map((port, i) => {
-        const lines = (PORT_LABEL[port.type] ?? port.type).split('\n')
         const fill = PORT_COLOR[port.type] ?? '#e8d5a0'
+        const icon = PORT_ICON[port.type] ?? '⚓'
+        const label = PORT_LABEL[port.type] ?? port.type
+        const ratio = port.type === '3:1' ? '' : '2:1'
         return (
           <g key={i}>
-            {/* Lines connecting badge to its two edge vertices */}
-            <line x1={port.x} y1={port.y} x2={port.v1x} y2={port.v1y}
-              stroke={fill} strokeWidth="2" opacity="0.5" />
-            <line x1={port.x} y1={port.y} x2={port.v2x} y2={port.v2y}
-              stroke={fill} strokeWidth="2" opacity="0.5" />
+            {/* Pier planks from edge vertices to port */}
+            <line x1={port.v1x} y1={port.v1y} x2={port.x} y2={port.y}
+              stroke="#6b4c1e" strokeWidth="4" strokeLinecap="round" opacity="0.85" />
+            <line x1={port.v2x} y1={port.v2y} x2={port.x} y2={port.y}
+              stroke="#6b4c1e" strokeWidth="4" strokeLinecap="round" opacity="0.85" />
+            {/* Dock end cap */}
+            <line x1={port.v1x} y1={port.v1y} x2={port.v2x} y2={port.v2y}
+              stroke="#6b4c1e" strokeWidth="3" strokeLinecap="round" opacity="0.6" />
+
             {/* Badge */}
-            <g transform={`translate(${port.x}, ${port.y})`}>
-              <circle r={18} fill={fill} stroke="#fff" strokeWidth="1.5"
-                style={{ filter: 'drop-shadow(0 2px 4px #00000055)' }} />
-              {lines.map((line, li) => (
-                <text key={li} x={0} y={lines.length === 1 ? 1 : -4 + li * 10}
-                  textAnchor="middle" dominantBaseline="middle"
-                  fontSize={li === 0 ? 8 : 7} fontWeight="800"
-                  fontFamily="Nunito, sans-serif" fill="#fff"
-                  style={{ userSelect: 'none' }}>
-                  {line}
-                </text>
-              ))}
+            <g transform={`translate(${port.x}, ${port.y})`}
+              style={{ filter: 'drop-shadow(0 3px 6px #00000070)' }}>
+              {/* Badge body */}
+              <rect x={-22} y={-26} width={44} height={52} rx={10}
+                fill={fill} stroke="#ffffffaa" strokeWidth="1.5" />
+              {/* Darker bottom strip for ratio text */}
+              <rect x={-22} y={12} width={44} height={14} rx={0}
+                fill="#00000030" />
+              <rect x={-22} y={16} width={44} height={10} rx={10}
+                fill="#00000030" />
+              {/* Icon */}
+              <text x={0} y={-8}
+                textAnchor="middle" dominantBaseline="middle"
+                fontSize={16} style={{ userSelect: 'none' }}>
+                {icon}
+              </text>
+              {/* Resource label */}
+              <text x={0} y={7}
+                textAnchor="middle" dominantBaseline="middle"
+                fontSize={7.5} fontWeight="800"
+                fontFamily="Nunito, sans-serif" fill="#fff"
+                style={{ userSelect: 'none' }}>
+                {label}
+              </text>
+              {/* Ratio text */}
+              <text x={0} y={20}
+                textAnchor="middle" dominantBaseline="middle"
+                fontSize={7} fontWeight="700"
+                fontFamily="Nunito, sans-serif" fill="#ffffffcc"
+                style={{ userSelect: 'none' }}>
+                {ratio || label}
+              </text>
             </g>
           </g>
         )
       })}
+
+      {/* ── Mode hints — rendered last so they always appear above port badges ── */}
+      {(editable || piecesMode || roadsMode || robberMode) && (() => {
+        const hint =
+          editable   ? 'Click tile → cycle resource · Click number → cycle token' :
+          piecesMode ? 'Click vertex → cycle: Red S → Blue S → Green S → Orange S → cities → clear' :
+          roadsMode  ? 'Click edge → cycle road owner: Red → Blue → Green → Orange → clear' :
+                       'Click a hex → move the robber there (blocks that tile\'s production)'
+        const W = 420
+        return (
+          <g style={{ pointerEvents: 'none' }}>
+            <rect
+              x={CX - W / 2} y={VH - 20}
+              width={W} height={16} rx={6}
+              fill="#000000bb"
+            />
+            <text
+              x={CX} y={VH - 9}
+              textAnchor="middle" dominantBaseline="middle"
+              fontSize={9} fill="#ffffffcc"
+              fontFamily="Nunito, sans-serif" fontWeight="700"
+            >
+              {hint}
+            </text>
+          </g>
+        )
+      })()}
     </svg>
   )
 }

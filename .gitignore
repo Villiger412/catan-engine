@@ -28,3 +28,10 @@ dist/
 # Tool-local artefacts
 .claude/
 **/.claude/
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+*~

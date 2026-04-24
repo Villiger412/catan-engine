@@ -210,6 +210,15 @@ export default function App() {
               ↺ Pieces
             </button>
           )}
+          <a
+            className="kofi-btn"
+            href="https://ko-fi.com/idoshcatan"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Support this project on Ko-fi"
+          >
+            ☕ <span className="kofi-label">Buy me a coffee</span>
+          </a>
         </div>
       </header>
 
