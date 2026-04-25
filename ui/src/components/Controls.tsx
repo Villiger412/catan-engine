@@ -3,6 +3,8 @@ import type { GamePosition, MethodInfo, SimulateRequest } from '../types'
 import type { Calibration } from '../lib/timing'
 import { estimateMs, formatEta, formatEtaLong, formatElapsed, positionProgress } from '../lib/timing'
 
+export type SimMode = 'winprob' | 'records'
+
 interface Props {
   config: SimulateRequest
   methods: MethodInfo[]
@@ -11,6 +13,8 @@ interface Props {
   loading: boolean
   position?: GamePosition | null
   calibration?: Calibration | null
+  simMode?: SimMode
+  onSimModeChange?: (m: SimMode) => void
 }
 
 function policyLabel(id: string): string {
@@ -28,7 +32,7 @@ const SIM_PRESETS = [
   { label: 'Auto', value: 0,      tag: '±2% CI',  config: { n_simulations: 5_000,  target_margin: 0.02      } },
 ] as const
 
-export default function Controls({ config, methods, onChange, onRun, loading, position, calibration }: Props) {
+export default function Controls({ config, methods, onChange, onRun, loading, position, calibration, simMode = 'winprob', onSimModeChange }: Props) {
   const isAuto = config.target_margin !== undefined
 
   const progress = positionProgress(position ?? null)
@@ -152,6 +156,29 @@ export default function Controls({ config, methods, onChange, onRun, loading, po
                 </button>
               )
             })}
+          </div>
+        </>
+      )}
+
+      {/* Output mode */}
+      {onSimModeChange && (
+        <>
+          <div className="preset-label">Output</div>
+          <div className="sim-mode-row">
+            <button
+              className={`sim-mode-btn${simMode === 'winprob' ? ' active' : ''}`}
+              onClick={() => onSimModeChange('winprob')}
+              title="Aggregate win probabilities with 95% CI bars"
+            >
+              📊 Win Prob
+            </button>
+            <button
+              className={`sim-mode-btn${simMode === 'records' ? ' active' : ''}`}
+              onClick={() => onSimModeChange('records')}
+              title="Per-game statistics: turn distribution, seat averages, LR/LA rates"
+            >
+              📋 Game Stats
+            </button>
           </div>
         </>
       )}

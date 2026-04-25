@@ -7,6 +7,7 @@ pub mod state;
 pub mod stats;
 
 use pyo3::prelude::*;
+use std::sync::Arc;
 
 /// Python-facing win probability result.
 #[pyclass(skip_from_py_object)]
@@ -492,6 +493,232 @@ fn get_board_layout() -> String {
     board_layout_to_json(&board::BoardLayout::beginner())
 }
 
+// ── Research-mode records pipeline ─────────────────────────────────────────
+
+/// Columnar (struct-of-arrays) result for `simulate_games_records`.
+///
+/// SoA over AoS because pandas/numpy build DataFrames roughly 10× faster
+/// from one column at a time than from a list of dicts. Per-seat fields are
+/// `Vec<Vec<u8>>` of shape `[n_games][PLAYER_COUNT]`; the Python side
+/// transposes them into `p{i}_*` columns.
+#[pyclass(skip_from_py_object)]
+#[derive(Debug, Clone)]
+pub struct GameRecordsResult {
+    #[pyo3(get)]
+    pub winner: Vec<i8>,
+    #[pyo3(get)]
+    pub turns: Vec<u16>,
+    #[pyo3(get)]
+    pub antithetic_pair_id: Vec<i32>,
+
+    // Per-seat fields use `u16` rather than `u8`: pyo3 converts `Vec<u8>` to
+    // Python `bytes` (which numpy then can't `asarray` as a 2-D int matrix
+    // without per-row decoding). `u16` lifts that special-case.
+    #[pyo3(get)]
+    pub vp_total: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub vp_hidden: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub settlements: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub cities: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub roads: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub knights_played: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub longest_road_len: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub total_resources: Vec<Vec<u16>>,
+    #[pyo3(get)]
+    pub unplayed_dev: Vec<Vec<u16>>,
+
+    #[pyo3(get)]
+    pub longest_road_player: Vec<i8>,
+    #[pyo3(get)]
+    pub largest_army_player: Vec<i8>,
+
+    #[pyo3(get)]
+    pub elapsed_ms: f64,
+    #[pyo3(get)]
+    pub games_per_sec: f64,
+    #[pyo3(get)]
+    pub policy_label: String,
+    #[pyo3(get)]
+    pub seed: u64,
+}
+
+fn parse_record_policy(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    coalition_pressure: f64,
+) -> PyResult<engine::RecordPolicy> {
+    // String: built-in policy by name.
+    if let Ok(name) = obj.extract::<String>() {
+        return Ok(engine::RecordPolicy::Builtin(parse_policy(&name)?));
+    }
+    // Object with `_overridden_hooks` attr → treat as a Strategy instance.
+    if obj.hasattr("_overridden_hooks").unwrap_or(false) {
+        let strat = policy::py_strategy::PyStrategy::from_pyobject(py, obj, coalition_pressure)?;
+        return Ok(engine::RecordPolicy::Python(Arc::new(strat)));
+    }
+    Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+        "strategy must be a policy name string (e.g. 'rule_based') or a \
+         catan_research.Strategy instance",
+    ))
+}
+
+/// Run a batch of games and return per-game records as a columnar result.
+///
+/// `strategy`: a single strategy used for all 4 seats. May be a built-in
+/// policy name (`"rule_based"`, `"mcts_200"`, ...) or a
+/// `catan_research.Strategy` instance.
+///
+/// `seat_strategies`: optional 4-element list of the same. Overrides
+/// `strategy` if provided.
+///
+/// Returns a `GameRecordsResult` whose per-seat fields are length-`n_games`
+/// vectors of length-4 vectors — Python expands them to `p{i}_*` columns.
+#[pyfunction]
+#[pyo3(signature = (
+    n_games=5000,
+    strategy=None,
+    seat_strategies=None,
+    n_threads=0,
+    antithetic=true,
+    seed=42,
+    coalition_pressure=1.0,
+    board_json=None,
+    position_json=None,
+))]
+#[allow(clippy::too_many_arguments)]
+fn simulate_games_records(
+    py: Python<'_>,
+    n_games: u32,
+    strategy: Option<Py<PyAny>>,
+    seat_strategies: Option<Vec<Py<PyAny>>>,
+    n_threads: usize,
+    antithetic: bool,
+    seed: u64,
+    coalition_pressure: f64,
+    board_json: Option<&str>,
+    position_json: Option<&str>,
+) -> PyResult<GameRecordsResult> {
+    let board = match board_json {
+        Some(bj) => board::BoardLayout::from_frontend_json(bj)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?,
+        None => board::BoardLayout::beginner(),
+    };
+    let initial_state = match position_json {
+        Some(pj) => parse_position_json(pj, &board)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?,
+        None => state::GameState::new(&board),
+    };
+
+    let seat_specs: [engine::RecordPolicy; board::PLAYER_COUNT] = match seat_strategies {
+        Some(list) => {
+            if list.len() != board::PLAYER_COUNT {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "seat_strategies must have exactly {} entries, got {}",
+                    board::PLAYER_COUNT,
+                    list.len()
+                )));
+            }
+            let mut out: [Option<engine::RecordPolicy>; board::PLAYER_COUNT] = Default::default();
+            for (i, item) in list.iter().enumerate() {
+                let bound = item.bind(py);
+                out[i] =
+                    Some(parse_record_policy(py, bound, coalition_pressure)?);
+            }
+            [
+                out[0].take().unwrap(),
+                out[1].take().unwrap(),
+                out[2].take().unwrap(),
+                out[3].take().unwrap(),
+            ]
+        }
+        None => {
+            let one = match strategy {
+                Some(obj) => parse_record_policy(py, obj.bind(py), coalition_pressure)?,
+                None => engine::RecordPolicy::Builtin(engine::PolicyType::RuleBased),
+            };
+            [one.clone(), one.clone(), one.clone(), one]
+        }
+    };
+
+    let cps = [coalition_pressure; board::PLAYER_COUNT];
+
+    // Long Python callbacks would deadlock GIL-poll; release while running.
+    let result = py.detach(|| {
+        engine::run_records_batch(
+            &board,
+            &initial_state,
+            &seat_specs,
+            cps,
+            n_games,
+            n_threads,
+            antithetic,
+            seed,
+        )
+    });
+
+    // Project AoS records into SoA columns for fast DataFrame construction.
+    let n = result.records.len();
+    let mut winner = Vec::with_capacity(n);
+    let mut turns = Vec::with_capacity(n);
+    let mut vp_total = Vec::with_capacity(n);
+    let mut vp_hidden = Vec::with_capacity(n);
+    let mut settlements = Vec::with_capacity(n);
+    let mut cities = Vec::with_capacity(n);
+    let mut roads = Vec::with_capacity(n);
+    let mut knights_played = Vec::with_capacity(n);
+    let mut longest_road_len = Vec::with_capacity(n);
+    let mut total_resources = Vec::with_capacity(n);
+    let mut unplayed_dev = Vec::with_capacity(n);
+    let mut longest_road_player = Vec::with_capacity(n);
+    let mut largest_army_player = Vec::with_capacity(n);
+
+    let widen = |a: &[u8; board::PLAYER_COUNT]| -> Vec<u16> {
+        a.iter().map(|&v| v as u16).collect()
+    };
+    for rec in result.records.iter() {
+        winner.push(rec.winner);
+        turns.push(rec.turns);
+        vp_total.push(widen(&rec.vp_total));
+        vp_hidden.push(widen(&rec.vp_hidden));
+        settlements.push(widen(&rec.settlements));
+        cities.push(widen(&rec.cities));
+        roads.push(widen(&rec.roads));
+        knights_played.push(widen(&rec.knights_played));
+        longest_road_len.push(widen(&rec.longest_road_len));
+        total_resources.push(widen(&rec.total_resources));
+        unplayed_dev.push(widen(&rec.unplayed_dev));
+        longest_road_player.push(rec.longest_road_player);
+        largest_army_player.push(rec.largest_army_player);
+    }
+
+    Ok(GameRecordsResult {
+        winner,
+        turns,
+        antithetic_pair_id: result.antithetic_pair_id,
+        vp_total,
+        vp_hidden,
+        settlements,
+        cities,
+        roads,
+        knights_played,
+        longest_road_len,
+        total_resources,
+        unplayed_dev,
+        longest_road_player,
+        largest_army_player,
+        elapsed_ms: result.elapsed_ms,
+        games_per_sec: result.games_per_sec,
+        policy_label: result.policy_label,
+        seed,
+    })
+}
+
 /// Python module definition.
 #[pymodule]
 fn catan_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -502,9 +729,12 @@ fn catan_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(simulate_from_position, m)?)?;
     m.add_function(wrap_pyfunction!(simulate_from_position_converged, m)?)?;
     m.add_function(wrap_pyfunction!(simulate_per_seat, m)?)?;
+    m.add_function(wrap_pyfunction!(simulate_games_records, m)?)?;
     m.add_function(wrap_pyfunction!(required_simulations, m)?)?;
     m.add_function(wrap_pyfunction!(get_board_layout, m)?)?;
     m.add_function(wrap_pyfunction!(get_random_board_layout, m)?)?;
     m.add_class::<WinProbResult>()?;
+    m.add_class::<GameRecordsResult>()?;
+    m.add_class::<policy::py_strategy::StrategyCtx>()?;
     Ok(())
 }

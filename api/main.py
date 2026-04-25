@@ -6,6 +6,7 @@ Wraps the PyO3 Rust bindings and serves the React frontend in production.
 import dataclasses
 import json
 import sys
+import statistics
 from pathlib import Path
 from typing import Optional
 
@@ -73,6 +74,41 @@ class SimulateResponse(BaseModel):
     max_margin: float
 
 
+class RecordsRequest(BaseModel):
+    n_games: int = Field(2000, ge=100, le=50_000)
+    policy: str = Field("rule_based", pattern="^(rule_based|random|mcts|mcts_\\d+|mcts_rule|mcts_rule_\\d+)$")
+    antithetic: bool = True
+    seed: int = 42
+    board: Optional[dict] = Field(None, description="Custom board; None = beginner board")
+    position: Optional[dict] = Field(None, description="Mid-game position; None = fresh game")
+    coalition_pressure: float = Field(1.0, ge=0.0, le=3.0)
+
+
+class SeatStats(BaseModel):
+    win_rate: float
+    avg_vp: float
+    avg_cities: float
+    avg_settlements: float
+    avg_roads: float
+    avg_knights: float
+    lr_rate: float
+    la_rate: float
+
+
+class RecordsResponse(BaseModel):
+    games_run: int
+    elapsed_ms: float
+    games_per_sec: float
+    policy: str
+    turns_min: int
+    turns_p25: float
+    turns_median: float
+    turns_mean: float
+    turns_p75: float
+    turns_max: int
+    seat_stats: list[SeatStats]
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
@@ -128,6 +164,172 @@ def simulate(req: SimulateRequest):
         raise HTTPException(503, str(e))
 
     return SimulateResponse(**dataclasses.asdict(out))
+
+
+@app.post("/api/simulate-records", response_model=RecordsResponse)
+def simulate_records(req: RecordsRequest):
+    try:
+        import catan_engine  # type: ignore
+    except ImportError:
+        raise HTTPException(503, "Engine not compiled — run `maturin build --release`")
+
+    try:
+        r = catan_engine.simulate_games_records(
+            n_games=req.n_games,
+            strategy=req.policy,
+            antithetic=req.antithetic,
+            seed=req.seed,
+            coalition_pressure=req.coalition_pressure,
+            board_json=json.dumps(req.board) if req.board is not None else None,
+            position_json=json.dumps(req.position) if req.position is not None else None,
+        )
+    except Exception as e:
+        raise HTTPException(503, str(e))
+
+    n = len(r.winner)
+    if n == 0:
+        raise HTTPException(503, "No games completed")
+
+    turns_sorted = sorted(r.turns)
+
+    def pct(lst: list, p: float) -> float:
+        idx = p / 100.0 * (len(lst) - 1)
+        lo = int(idx)
+        hi = min(lo + 1, len(lst) - 1)
+        return lst[lo] + (lst[hi] - lst[lo]) * (idx - lo)
+
+    seat_stats = []
+    for s in range(4):
+        wins = sum(1 for w in r.winner if w == s)
+        vp_vals    = [r.vp_total[i][s]      for i in range(n)]
+        city_vals  = [r.cities[i][s]        for i in range(n)]
+        set_vals   = [r.settlements[i][s]   for i in range(n)]
+        road_vals  = [r.roads[i][s]         for i in range(n)]
+        knt_vals   = [r.knights_played[i][s] for i in range(n)]
+        lr_count   = sum(1 for i in range(n) if r.longest_road_player[i] == s)
+        la_count   = sum(1 for i in range(n) if r.largest_army_player[i] == s)
+        seat_stats.append(SeatStats(
+            win_rate=wins / n,
+            avg_vp=statistics.mean(vp_vals),
+            avg_cities=statistics.mean(city_vals),
+            avg_settlements=statistics.mean(set_vals),
+            avg_roads=statistics.mean(road_vals),
+            avg_knights=statistics.mean(knt_vals),
+            lr_rate=lr_count / n,
+            la_rate=la_count / n,
+        ))
+
+    return RecordsResponse(
+        games_run=n,
+        elapsed_ms=r.elapsed_ms,
+        games_per_sec=r.games_per_sec,
+        policy=r.policy_label,
+        turns_min=int(turns_sorted[0]),
+        turns_p25=pct(turns_sorted, 25),
+        turns_median=pct(turns_sorted, 50),
+        turns_mean=statistics.mean(r.turns),
+        turns_p75=pct(turns_sorted, 75),
+        turns_max=int(turns_sorted[-1]),
+        seat_stats=seat_stats,
+    )
+
+
+def _records_result_to_response(r, n_games_hint: int) -> RecordsResponse:
+    """Shared projection from a GameRecordsResult into RecordsResponse."""
+    n = len(r.winner)
+    if n == 0:
+        raise HTTPException(503, "No games completed")
+    turns_sorted = sorted(r.turns)
+
+    def pct(lst, p):
+        idx = p / 100.0 * (len(lst) - 1)
+        lo = int(idx)
+        hi = min(lo + 1, len(lst) - 1)
+        return lst[lo] + (lst[hi] - lst[lo]) * (idx - lo)
+
+    seat_stats = []
+    for s in range(4):
+        wins = sum(1 for w in r.winner if w == s)
+        seat_stats.append(SeatStats(
+            win_rate=wins / n,
+            avg_vp=statistics.mean(r.vp_total[i][s] for i in range(n)),
+            avg_cities=statistics.mean(r.cities[i][s] for i in range(n)),
+            avg_settlements=statistics.mean(r.settlements[i][s] for i in range(n)),
+            avg_roads=statistics.mean(r.roads[i][s] for i in range(n)),
+            avg_knights=statistics.mean(r.knights_played[i][s] for i in range(n)),
+            lr_rate=sum(1 for i in range(n) if r.longest_road_player[i] == s) / n,
+            la_rate=sum(1 for i in range(n) if r.largest_army_player[i] == s) / n,
+        ))
+
+    return RecordsResponse(
+        games_run=n,
+        elapsed_ms=r.elapsed_ms,
+        games_per_sec=r.games_per_sec,
+        policy=r.policy_label,
+        turns_min=int(turns_sorted[0]),
+        turns_p25=pct(turns_sorted, 25),
+        turns_median=pct(turns_sorted, 50),
+        turns_mean=statistics.mean(r.turns),
+        turns_p75=pct(turns_sorted, 75),
+        turns_max=int(turns_sorted[-1]),
+        seat_stats=seat_stats,
+    )
+
+
+class StrategyRequest(BaseModel):
+    code: str = Field(..., description="Python source defining a Strategy subclass")
+    class_name: str = Field(..., min_length=1, max_length=100)
+    n_games: int = Field(1000, ge=100, le=20_000)
+    seed: int = 42
+    antithetic: bool = True
+    coalition_pressure: float = Field(1.0, ge=0.0, le=3.0)
+    board: Optional[dict] = None
+    position: Optional[dict] = None
+
+
+@app.post("/api/run-strategy", response_model=RecordsResponse)
+def run_strategy(req: StrategyRequest):
+    try:
+        import catan_engine  # type: ignore
+        import catan_research  # type: ignore  # noqa: F401 — ensures Strategy is importable
+    except ImportError as e:
+        raise HTTPException(503, f"Engine not compiled or catan_research missing: {e}")
+
+    # Compile and execute submitted code in a sandboxed namespace.
+    try:
+        code = compile(req.code, "<strategy>", "exec")
+    except SyntaxError as e:
+        raise HTTPException(400, f"Syntax error: {e}")
+
+    ns: dict = {}
+    try:
+        exec(code, ns)  # noqa: S102
+    except Exception as e:
+        raise HTTPException(400, f"Error executing strategy code: {e}")
+
+    if req.class_name not in ns:
+        raise HTTPException(400, f"Class '{req.class_name}' not found in submitted code")
+
+    cls = ns[req.class_name]
+    try:
+        strategy_instance = cls()
+    except Exception as e:
+        raise HTTPException(400, f"Could not instantiate '{req.class_name}': {e}")
+
+    try:
+        r = catan_engine.simulate_games_records(
+            n_games=req.n_games,
+            strategy=strategy_instance,
+            antithetic=req.antithetic,
+            seed=req.seed,
+            coalition_pressure=req.coalition_pressure,
+            board_json=json.dumps(req.board) if req.board is not None else None,
+            position_json=json.dumps(req.position) if req.position is not None else None,
+        )
+    except Exception as e:
+        raise HTTPException(503, f"Simulation error: {e}")
+
+    return _records_result_to_response(r, req.n_games)
 
 
 # ── Serve React build in production ───────────────────────────────────────────

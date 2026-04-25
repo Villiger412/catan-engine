@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import HexBoard from './components/HexBoard'
 import WinPanel from './components/WinPanel'
+import RecordsPanel from './components/RecordsPanel'
+import StrategyPanel from './components/StrategyPanel'
 import Controls from './components/Controls'
 import CardsPanel from './components/CardsPanel'
 import PlayerBar from './components/PlayerBar'
 import { BEGINNER_BOARD } from './lib/boardData'
-import type { BoardData, GamePosition, MethodInfo, SimResult, SimulateRequest } from './types'
+import type { BoardData, GamePosition, MethodInfo, RecordsResult, SimResult, SimulateRequest } from './types'
 import type { Calibration } from './lib/timing'
+import type { SimMode } from './components/Controls'
 import { positionProgress } from './lib/timing'
 import './App.css'
 
@@ -48,9 +51,11 @@ export default function App() {
   const [config, setConfig] = useState<SimulateRequest>(DEFAULT_CONFIG)
   const [position, setPosition] = useState<GamePosition>(DEFAULT_POSITION)
   const [result, setResult] = useState<SimResult | null>(null)
+  const [recordsResult, setRecordsResult] = useState<RecordsResult | null>(null)
   const [calibration, setCalibration] = useState<Calibration | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [simMode, setSimMode] = useState<SimMode>('winprob')
   const [mode, setMode] = useState<BoardMode>('view')
   const [cardsFocusPlayer, setCardsFocusPlayer] = useState<number | null>(null)
   const [randomizing, setRandomizing] = useState(false)
@@ -111,50 +116,68 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const body: Record<string, unknown> = { ...config }
-      if (isCustomBoard) body.board = board
-      if (hasPosition) body.position = position
-      const res = await fetch('/api/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
-      const data: SimResult = await res.json()
-      setResult(data)
-
-      // Capture calibration for self-correcting ETAs on the next run.
-      if (data.games_per_sec > 0 && data.simulations_run > 0) {
-        const progress = positionProgress(hasPosition ? position : null)
-        setCalibration({
-          policy: data.policy,
-          msPerGame: data.elapsed_ms / data.simulations_run,
-          avgTurns: data.avg_turns,
-          turnsPerSec: data.avg_turns * data.games_per_sec,
-          progress,
-          simulationsRun: data.simulations_run,
+      if (simMode === 'records') {
+        const body: Record<string, unknown> = {
+          n_games: config.n_simulations,
+          policy: config.policy,
+          antithetic: config.antithetic,
+          seed: config.seed,
+          coalition_pressure: config.coalition_pressure,
+        }
+        if (isCustomBoard) body.board = board
+        if (hasPosition) body.position = position
+        const res = await fetch('/api/simulate-records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         })
-      }
-
-      // Log converged-n for tuning the Auto-mode AUTO_MODE_TYPICAL_N constant.
-      if (config.target_margin !== undefined) {
-        // eslint-disable-next-line no-console
-        console.log('[auto-mode converged]', {
-          policy: data.policy,
-          target_margin: config.target_margin,
-          simulations_run: data.simulations_run,
-          elapsed_ms: data.elapsed_ms,
-          max_margin: data.max_margin,
-          avg_turns: data.avg_turns,
-          games_per_sec: data.games_per_sec,
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
+        const data: RecordsResult = await res.json()
+        setRecordsResult(data)
+      } else {
+        const body: Record<string, unknown> = { ...config }
+        if (isCustomBoard) body.board = board
+        if (hasPosition) body.position = position
+        const res = await fetch('/api/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         })
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
+        const data: SimResult = await res.json()
+        setResult(data)
+
+        if (data.games_per_sec > 0 && data.simulations_run > 0) {
+          const progress = positionProgress(hasPosition ? position : null)
+          setCalibration({
+            policy: data.policy,
+            msPerGame: data.elapsed_ms / data.simulations_run,
+            avgTurns: data.avg_turns,
+            turnsPerSec: data.avg_turns * data.games_per_sec,
+            progress,
+            simulationsRun: data.simulations_run,
+          })
+        }
+
+        if (config.target_margin !== undefined) {
+          // eslint-disable-next-line no-console
+          console.log('[auto-mode converged]', {
+            policy: data.policy,
+            target_margin: config.target_margin,
+            simulations_run: data.simulations_run,
+            elapsed_ms: data.elapsed_ms,
+            max_margin: data.max_margin,
+            avg_turns: data.avg_turns,
+            games_per_sec: data.games_per_sec,
+          })
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [config, board, isCustomBoard, position, hasPosition])
+  }, [simMode, config, board, isCustomBoard, position, hasPosition])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -258,6 +281,8 @@ export default function App() {
             loading={loading}
             position={hasPosition ? position : null}
             calibration={calibration}
+            simMode={simMode}
+            onSimModeChange={setSimMode}
           />
           {error && (
             <div className="error-banner">
@@ -266,7 +291,20 @@ export default function App() {
               <small>Is the API server running? <code>cd api && uvicorn main:app --reload</code></small>
             </div>
           )}
-          <WinPanel result={result} loading={loading} />
+          {simMode === 'records'
+            ? <>
+                <RecordsPanel result={recordsResult} loading={loading} />
+                <StrategyPanel
+                  config={config}
+                  isCustomBoard={isCustomBoard}
+                  board={board}
+                  hasPosition={hasPosition}
+                  position={position}
+                  onResult={setRecordsResult}
+                />
+              </>
+            : <WinPanel result={result} loading={loading} />
+          }
         </aside>
       </main>
 

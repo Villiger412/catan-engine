@@ -1,3 +1,5 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 maturin>=1.4.0
+pandas>=2.0
+numpy>=1.24

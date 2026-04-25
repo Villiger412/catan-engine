@@ -1,13 +1,16 @@
 pub mod mcts;
+pub mod py_strategy;
 pub mod rule_based;
 
 use crate::actions::Action;
 use crate::board::BoardLayout;
 use crate::board::PLAYER_COUNT;
 use crate::policy::mcts::MctsPolicy;
+use crate::policy::py_strategy::PyStrategy;
 use crate::policy::rule_based::RuleBasedPolicy;
 use crate::state::GameState;
 use rand::Rng;
+use std::sync::Arc;
 
 /// Trait for game-playing policies.
 pub trait Policy {
@@ -43,6 +46,10 @@ pub enum SeatPolicy {
     Random(RandomPolicy),
     RuleBased(RuleBasedPolicy),
     Mcts(MctsPolicy),
+    /// Python-supplied strategy. Held in `Arc` because per-thread `SeatPolicy`
+    /// instances are built from a shared spec, and `PyStrategy` itself owns
+    /// `Py<PyAny>` handles which are cheap to clone but conceptually shared.
+    Py(Arc<PyStrategy>),
 }
 
 impl Policy for SeatPolicy {
@@ -57,6 +64,7 @@ impl Policy for SeatPolicy {
             SeatPolicy::Random(p) => p.select_action(state, board, actions, rng),
             SeatPolicy::RuleBased(p) => p.select_action(state, board, actions, rng),
             SeatPolicy::Mcts(p) => p.select_action(state, board, actions, rng),
+            SeatPolicy::Py(p) => p.select_action(state, board, actions, rng),
         }
     }
 }

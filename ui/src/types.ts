@@ -61,3 +61,38 @@ export interface SimResult {
 
 export const PLAYER_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12'] as const
 export const PLAYER_NAMES = ['Red', 'Blue', 'Green', 'Orange'] as const
+
+export interface SeatStats {
+  win_rate: number
+  avg_vp: number
+  avg_cities: number
+  avg_settlements: number
+  avg_roads: number
+  avg_knights: number
+  lr_rate: number
+  la_rate: number
+}
+
+export interface RecordsResult {
+  games_run: number
+  elapsed_ms: number
+  games_per_sec: number
+  policy: string
+  turns_min: number
+  turns_p25: number
+  turns_median: number
+  turns_mean: number
+  turns_p75: number
+  turns_max: number
+  seat_stats: SeatStats[]
+}
+
+export interface RecordsRequest {
+  n_games: number
+  policy: string
+  antithetic: boolean
+  seed: number
+  coalition_pressure: number
+  board?: BoardData
+  position?: GamePosition
+}

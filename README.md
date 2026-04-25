@@ -308,6 +308,110 @@ python psro.py --sims 1500 --fp-iters 2000            # meta-solver     (new)
 
 ---
 
+## 9 · Research mode (Python-pluggable strategies + per-game CSV)
+
+The aggregate `simulate_batch` API gives one number (winrate per seat). Often
+you want the opposite: write your own strategy in Python without touching
+Rust, run N games, and get *one row per game* you can analyze in pandas.
+
+That's `catan_research`:
+
+```python
+from catan_research import Strategy, simulate_games
+
+class CornerHoarder(Strategy):
+    def score_setup_vertex(self, ctx, vertex_id):
+        prod      = ctx.vertex_production_value(vertex_id)
+        diversity = ctx.vertex_resource_diversity(vertex_id)
+        return prod * (diversity ** 2)   # my hypothesis
+
+df = simulate_games(strategy=CornerHoarder(), n_games=2000, seed=42)
+print(df.groupby("winner").size() / len(df))      # winrate by seat
+print(df.query("winner == 0")["turns"].describe())
+```
+
+Anything you don't override falls through to the built-in rule-based
+default — Tier-1 (built-in) speed for those decisions, GIL-callback cost
+only for the hooks you replace.
+
+### Hooks
+
+| Hook | Signature | ~Calls/game | Notes |
+|---|---|---|---|
+| `score_setup_vertex` | `(ctx, vertex_id) -> float` | ~16 | Argmax across legal vertices. |
+| `score_setup_road` | `(ctx, edge_id) -> float` | ~16 | Argmax across legal edges. |
+| `choose_robber_hex` | `(ctx, candidates: list[int]) -> int` | ~8-20 | Returns hex ID. |
+| `choose_steal_target` | `(ctx, candidates: list[int]) -> int` | ~8-20 | Returns seat ID. |
+| `choose_yop` / `choose_monopoly` | `(ctx) -> int` | ~2-4 | Returns resource (0-4). |
+| `select_action` *(Tier-3)* | `(ctx, actions) -> int \| tuple` | 100-300 | Replaces the priority chain wholesale. Slow. |
+
+`ctx` is a `StrategyCtx` exposed by the Rust side. Useful methods:
+`ctx.vertex_production_value(v)`, `ctx.vertex_resource_diversity(v)`,
+`ctx.adjacent_hexes(v)`, `ctx.adjacent_vertices(v)`, `ctx.is_port(v)`,
+`ctx.port_kind(v)`, `ctx.player_vp(p)`, `ctx.player_resources(p)`,
+`ctx.player_total_resources(p)`, `ctx.player_settlements(p)`,
+`ctx.player_cities(p)`, `ctx.player_roads(p)`, `ctx.player_knights_played(p)`,
+`ctx.hex_vertices(h)`, `ctx.hex_resource(h)`, `ctx.hex_number(h)`,
+`ctx.hex_production(h)`, `ctx.player_has_building(p, v)`,
+`ctx.player_has_road(p, e)`, `ctx.edge_endpoints(e)`, `ctx.vp_totals()`,
+plus properties `current_player`, `turn_number`, `phase`, `robber_hex`,
+`longest_road_player`, `largest_army_player`.
+
+### Per-seat strategies
+
+```python
+# A/B vs baseline: my strategy in seat 0, rule_based for the rest
+df = simulate_games(
+    seat_strategies=[CornerHoarder(), "rule_based", "rule_based", "rule_based"],
+    n_games=2000,
+)
+```
+
+### `sweep()` over strategies and params
+
+```python
+from catan_research import sweep
+
+df = sweep(
+    grid={
+        "strategy":           [CornerHoarder(), "rule_based"],
+        "coalition_pressure": [0.0, 1.0, 2.0],
+    },
+    n_games=2000, seed=42, out="sweeps/mine_vs_baseline.csv",
+)
+```
+
+### Output schema (one row per game)
+
+`game_id`, `seed`, `antithetic_pair_id`, `winner` (-1 = draw), `turns`,
+`longest_road_player`, `largest_army_player`, plus `p{i}_*` for `i ∈ 0..3`
+and `* ∈ {vp_total, vp_hidden, settlements, cities, roads, knights_played,
+longest_road_len, total_resources, unplayed_dev}`.
+
+### Performance
+
+| Tier | Description | Throughput hit |
+|---|---|---|
+| 1 | Built-in name (`"rule_based"`) | 1× (full speed) |
+| 2 | A few setup or rare-phase hooks overridden | 2-5× slower |
+| 3 | `select_action` overridden (every decision is Python) | 20-50× slower |
+
+When any seat has live Python hooks, the records pipeline runs
+single-threaded — GIL contention destroys parallel scaling, and Tier-2
+strategies are fast enough not to need it.
+
+### CLI
+
+```bash
+python -m catan_research.run --n-games 1000 --strategy rule_based --out r.csv
+python -m catan_research.run --strategy-module my_strats.py:CornerHoarder \
+    --n-games 500 --out ch.csv
+python -m catan_research.run --sweep coalition_pressure=0,1,2 --n-games 200 \
+    --out sweep.csv
+```
+
+---
+
 ## 8 · Key references
 
 - Szita, I.; Chaslot, G. & Spronck, P. (2010). *Monte-Carlo Tree Search in Settlers of Catan.* ACG.
