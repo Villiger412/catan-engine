@@ -244,15 +244,17 @@
 }
 
 /* ── Board section ─────────────────────────────────────────────────────────── */
+/* The SVG paints its own ocean (extends past the viewBox), so the section
+   itself stays transparent — no visible seam between section background
+   and SVG ocean at any aspect ratio. */
 .board-section {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    radial-gradient(ellipse 80% 70% at 50% 50%, #1d4570 0%, #0a2140 55%, #041122 100%);
+  background: #0a2140;
   overflow: hidden;
-  padding: 10px;
+  padding: 0;
 }
 .board-section::before {
   content: '';
@@ -262,6 +264,7 @@
     repeating-linear-gradient(45deg, #ffffff05 0 2px, transparent 2px 6px);
   pointer-events: none;
   opacity: 0.35;
+  z-index: 1;
 }
 .board-section::after {
   content: '';
@@ -269,6 +272,67 @@
   inset: 0;
   pointer-events: none;
   box-shadow: inset 0 0 120px #00000099;
+  z-index: 1;
+}
+.board-section .hex-board {
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.board-section .hex-board > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Zoom / pan controls — top-right of the board */
+.board-zoom-controls {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 3;
+}
+.board-zoom-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #0f2035ee, #0a182acc);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+  font-family: 'Nunito', sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 12px #00000070;
+  user-select: none;
+  transition: transform 0.08s ease, background 0.15s ease, opacity 0.15s ease;
+  line-height: 1;
+}
+.board-zoom-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #1a3458ee, #112137cc);
+  border-color: #2a4870;
+}
+.board-zoom-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.board-zoom-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.board-zoom-reset {
+  font-size: 16px;
+  margin-top: 4px;
 }
 
 .board-overlay-badge {
@@ -1184,10 +1248,11 @@
 
 .player-card-pieces {
   display: flex;
-  gap: 10px;
-  font-size: 10px;
+  gap: 12px;
+  font-size: 14px;
   color: var(--text-muted);
   font-weight: 800;
+  align-items: center;
 }
 .player-card-pieces .player-la-active {
   color: var(--wheat);
@@ -1199,7 +1264,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 10px;
+  font-size: 14px;
 }
 .player-hand-badge {
   display: inline-flex;
@@ -1220,7 +1285,7 @@
 .player-resource-mini {
   display: inline-flex;
   gap: 3px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .player-resource-mini.player-dev-mini { opacity: 0.9; }
 .player-res-pip {
@@ -1230,7 +1295,7 @@
   filter: drop-shadow(0 1px 0 #00000080);
 }
 .player-res-pip sub {
-  font-size: 8px;
+  font-size: 10px;
   color: var(--text-muted);
   margin-left: 1px;
   vertical-align: baseline;
@@ -1315,6 +1380,79 @@
 }
 .cards-modal .cards-panel::before { display: none; }
 
+/* ── Info button (top-left of header) ──────────────────────────────────────── */
+.info-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-muted);
+  background: linear-gradient(180deg, #0e2440 0%, #081729 100%);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: 'Rubik', 'Nunito', sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+  font-style: italic;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin-right: 4px;
+  transition: all 0.14s ease;
+  box-shadow: inset 0 1px 0 #ffffff10, 0 2px 4px #00000055;
+  flex-shrink: 0;
+}
+.info-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 #ffffff10, 0 2px 8px var(--accent-glow);
+}
+.info-btn:active { transform: translateY(0); }
+
+/* ── Info modal body ───────────────────────────────────────────────────────── */
+.info-modal { max-width: 640px; }
+.info-body {
+  padding: 16px 22px 20px 22px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.info-body section { margin-bottom: 18px; }
+.info-body section:last-child { margin-bottom: 0; }
+.info-body h3 {
+  font-family: 'Rubik', 'Nunito', sans-serif;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+  margin: 0 0 8px 0;
+}
+.info-body p { margin: 0 0 8px 0; color: var(--text); }
+.info-body p:last-child { margin-bottom: 0; }
+.info-body ul,
+.info-body ol {
+  margin: 6px 0 0 0;
+  padding-left: 22px;
+}
+.info-body li { margin-bottom: 6px; color: var(--text); }
+.info-body li::marker { color: var(--text-muted); }
+.info-body strong { color: #ffd680; font-weight: 700; }
+.info-body em { color: var(--text-muted); font-style: italic; }
+.info-body kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text);
+  background: #0a1c33;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  box-shadow: inset 0 -1px 0 #00000060;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    Side rail scrollbar (match global)
    ══════════════════════════════════════════════════════════════════════════ */
@@ -1385,27 +1523,51 @@
 }
 
 @media (max-width: 720px) {
+  .app {
+    height: auto;
+    min-height: 100vh;
+  }
   .app-header {
     flex-direction: column;
     align-items: stretch;
     height: auto;
     gap: 8px;
     padding: 8px 12px;
+    position: sticky;
+    top: 0;
   }
   .header-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
     width: 100%;
+    gap: 6px;
   }
   .logo-sub { display: none; }
   .app-main {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr auto;
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    overflow: visible;
+  }
+  .board-section {
+    /* Match the board SVG's natural ~square shape so the island fills
+       the section without wasted bands of ocean on top/bottom. */
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    min-height: min(96vw, 620px);
+  }
+  /* The sticky header covers the top-right corner of the board on mobile,
+     so anchor zoom controls to the bottom-right instead. */
+  .board-zoom-controls {
+    top: auto;
+    bottom: 14px;
   }
   .side-panel, .sim-rail {
     border-left: none;
     border-top: 1px solid var(--panel-border);
-    max-height: 45vh;
+    max-height: none;
+    overflow-y: visible;
+    box-shadow: none;
   }
   .player-bar {
     grid-template-columns: repeat(2, 1fr);
@@ -1418,6 +1580,24 @@
 @media (max-width: 480px) {
   .mode-btn .mode-label { display: none; }
   .mode-btn { padding: 6px 9px; }
+  .app-header { padding: 6px 10px; }
+  .logo-title { font-size: 16px; }
+  .player-bar {
+    grid-template-columns: 1fr;
+    gap: 5px;
+    padding: 6px 8px;
+  }
+  .board-section { min-height: min(96vw, 480px); }
+}
+
+/* Cards modal on small phones */
+@media (max-width: 420px) {
+  .cards-modal {
+    min-width: 0;
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 32px);
+  }
+  .cards-modal-backdrop { padding: 8px; }
 }
 
 /* ── Sim mode toggle (Win Prob / Game Stats) ───────────────────────────────── */

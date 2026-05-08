@@ -104,22 +104,6 @@ export default function WinPanel({ result, loading }: Props) {
         })}
       </div>
 
-      {/* Stats footer */}
-      {isReady && (
-        <div className="stats-grid">
-          <StatCell label="Simulations" value={result.simulations_run.toLocaleString()} />
-          <StatCell label="Time" value={`${result.elapsed_ms.toFixed(0)} ms`} />
-          <StatCell label="Speed" value={`${(result.games_per_sec / 1000).toFixed(1)}K g/s`} />
-          <StatCell label="Avg turns" value={result.avg_turns.toFixed(1)} />
-          <StatCell
-            label="Turns/s"
-            value={`${((result.avg_turns * result.games_per_sec) / 1000).toFixed(1)}K`}
-          />
-          <StatCell label="CI margin" value={`±${(result.max_margin * 100).toFixed(2)}%`} />
-          <StatCell label="Policy" value={result.policy.replace('_', '-')} />
-        </div>
-      )}
-
       {!isReady && !loading && (
         <div className="idle-hint">
           Run a simulation to see win probabilities
@@ -136,11 +120,3 @@ export default function WinPanel({ result, loading }: Props) {
   )
 }
 
-function StatCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat-cell">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-    </div>
-  )
-}

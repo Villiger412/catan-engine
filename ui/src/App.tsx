@@ -55,10 +55,11 @@ export default function App() {
   const [calibration, setCalibration] = useState<Calibration | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [simMode, setSimMode] = useState<SimMode>('winprob')
+  const [simMode] = useState<SimMode>('winprob')
   const [mode, setMode] = useState<BoardMode>('view')
   const [cardsFocusPlayer, setCardsFocusPlayer] = useState<number | null>(null)
   const [randomizing, setRandomizing] = useState(false)
+  const [showInfo, setShowInfo] = useState(false)
 
   const randomizeBoard = useCallback(async () => {
     setRandomizing(true)
@@ -197,6 +198,14 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="header-logo">
+          <button
+            className="info-btn"
+            onClick={() => setShowInfo(true)}
+            title="How to use Catan Engine"
+            aria-label="How to use Catan Engine"
+          >
+            i
+          </button>
           <span className="logo-hex">⬡</span>
           <span className="logo-title">Catan Engine</span>
           <span className="logo-sub">Win-probability sandbox</span>
@@ -282,7 +291,6 @@ export default function App() {
             position={hasPosition ? position : null}
             calibration={calibration}
             simMode={simMode}
-            onSimModeChange={setSimMode}
           />
           {error && (
             <div className="error-banner">
@@ -307,6 +315,89 @@ export default function App() {
           }
         </aside>
       </main>
+
+      {showInfo && (
+        <div className="cards-modal-backdrop" onClick={() => setShowInfo(false)}>
+          <div className="cards-modal info-modal" onClick={e => e.stopPropagation()}>
+            <header className="cards-modal-head">
+              <div className="cards-modal-title">How to use Catan Engine</div>
+              <button
+                className="cards-modal-close"
+                onClick={() => setShowInfo(false)}
+                title="Close"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </header>
+            <div className="info-body">
+              <section>
+                <h3>What this is</h3>
+                <p>
+                  A sandbox for estimating <strong>win probabilities</strong> in 2-4 player Catan.
+                  Set up a board and a mid-game position, run a simulation, and read the
+                  per-player win probabilities with 95% confidence intervals.
+                </p>
+              </section>
+
+              <section>
+                <h3>Quick start</h3>
+                <ol>
+                  <li>The board loads with the standard beginner layout. Hit <strong>🎲</strong> in the top-right to randomize a legal board, or use <strong>Board</strong> mode to edit tiles and numbers by hand.</li>
+                  <li>Switch to <strong>Pieces</strong> mode and click vertices to place settlements (click again to upgrade to a city).</li>
+                  <li>Switch to <strong>Roads</strong> mode and click edges to add roads, color-cycled by player.</li>
+                  <li>Use <strong>Robber</strong> mode to drop the robber on a hex.</li>
+                  <li>Click a player's slot in the top bar to edit their hand of resources, dev cards, played knights, and hidden VPs.</li>
+                  <li>In the right rail, pick a policy and number of simulations, then press <strong>Run</strong> (or just hit <kbd>Enter</kbd>).</li>
+                  <li>The Win panel shows per-player win probability with a 95% CI. Use <strong>↺ Pieces</strong> / <strong>↺ Board</strong> to reset.</li>
+                </ol>
+              </section>
+
+              <section>
+                <h3>How it works</h3>
+                <p>
+                  A Rust core plays <strong>thousands of full games</strong> from your position in parallel,
+                  using a chosen rollout policy for all four seats. The empirical win-rate per seat is
+                  reported with a Wilson 95% CI; auto-mode keeps simulating until the widest per-player
+                  half-width drops under your target margin.
+                </p>
+                <ul>
+                  <li><strong>rule_based</strong> — a tuned heuristic policy (city &gt; settlement &gt; knight &gt; trade &gt; road…). Fastest realistic baseline.</li>
+                  <li><strong>random</strong> — uniform over legal actions. Diagnostic only.</li>
+                  <li><strong>mcts_N</strong> — 1-ply UCB1 search with N rollouts per move. Slower but more tactical.</li>
+                  <li><strong>Coalition pressure</strong> — at 0 the policy is selfish; at 1 it weighs VP roughly as much as production when picking robber/steal targets; at 2 it focus-fires the leader.</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>Reading the numbers honestly</h3>
+                <p>
+                  Catan is stochastic, has hidden info, and is general-sum with 2-4 players — there is no
+                  single "GTO" win probability. Every result here is the win-rate under <em>the specific
+                  joint policy profile you chose</em>. Two well-converged runs with different policies can
+                  legitimately disagree by 10-20pp on the same position. Treat the answer as a band, not a
+                  point estimate, and try a coalition-pressure sweep if you care how robust it is.
+                </p>
+              </section>
+
+              <section>
+                <h3>About this project</h3>
+                <p>
+                  Catan Engine is a small passion project I built and run on my own. I pay for the
+                  hosting out of pocket, and there are <strong>no ads, no tracking, and no plans to
+                  monetize</strong> — I just enjoy the game and wanted a tool that takes its
+                  game-theoretic structure seriously.
+                </p>
+                <p>
+                  If it's useful to you and you'd like to help cover the server costs, donations are
+                  very welcome via the <strong>☕ Buy me a coffee</strong> button in the top-right.
+                  No pressure at all — using the site freely is just as appreciated.
+                </p>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
 
       {cardsFocusPlayer !== null && (
         <div className="cards-modal-backdrop" onClick={() => setCardsFocusPlayer(null)}>
