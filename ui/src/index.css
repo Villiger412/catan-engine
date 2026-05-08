@@ -9,6 +9,17 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* On phones/small tablets, allow the page to scroll naturally so panels below
+   the board aren't crushed into a tiny scrolling area. Desktop is untouched. */
+@media (max-width: 720px) {
+  html, body, #root {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
+  body { overflow-x: hidden; }
+}
+
 body {
   font-family: 'Nunito', 'Segoe UI', sans-serif;
   background:
